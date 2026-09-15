@@ -1,0 +1,14 @@
+allowBuilds:
+  '@parcel/watcher': true
+  electron: true
+  electron-winstaller: false
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - electron@44.3.0
+
+# app-builder-lib 26.16.1 声明 @electron/get ^3.0.0，但代码里用了 v5 才有的
+# ElectronDownloadCacheMode，pnpm 严格隔离下打包 Windows 会直接崩。
+# 升级到 electron-builder 27 后可删掉这条 override。
+overrides:
+  '@electron/get': ^5.1.0

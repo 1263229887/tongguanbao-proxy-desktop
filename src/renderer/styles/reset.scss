@@ -1,0 +1,124 @@
+/**
+ * 全局重置：清除浏览器默认样式，让 UnoCSS 原子类成为唯一的外观来源。
+ * 只放「抹平差异」的规则；项目自身的基础样式（字体、配色、滚动条、过渡）在 base.scss。
+ */
+
+// 盒模型与边框基线：UnoCSS 的 border 工具类只输出 border-width，
+// 而 border-style 初始值是 none，所以必须全局补 solid，原子类才能画出边框。
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  border-width: 0;
+  border-style: solid;
+}
+
+html {
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  tab-size: 4;
+}
+
+// 默认外边距与内边距
+body,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+blockquote,
+figure,
+pre,
+hr,
+dl,
+dd,
+ul,
+ol,
+form,
+fieldset,
+legend,
+th,
+td {
+  margin: 0;
+  padding: 0;
+}
+
+// 列表与语义元素
+ul,
+ol {
+  list-style: none;
+}
+
+blockquote,
+q {
+  quotes: none;
+
+  &::before,
+  &::after {
+    content: none;
+  }
+}
+
+// 媒体与表格
+img,
+picture,
+video,
+canvas,
+svg,
+iframe {
+  display: block;
+  max-width: 100%;
+  border-style: none;
+}
+
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+// 链接
+a {
+  color: inherit;
+  text-decoration: none;
+  background-color: transparent;
+}
+
+// 表单控件：不继承字体、自带边框和背景，必须统一抹掉
+input,
+button,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+// 背景色不抹到 input 上，否则原生 checkbox / radio 会画不出来
+button,
+select,
+textarea {
+  background-color: transparent;
+}
+
+button {
+  padding: 0;
+  cursor: pointer;
+}
+
+textarea {
+  resize: vertical;
+}
+
+// 长内容兜底，避免撑破容器
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  overflow-wrap: break-word;
+}

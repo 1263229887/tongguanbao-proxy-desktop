@@ -1,0 +1,48 @@
+appId: com.company.tongguanbao-proxy
+productName: 通关宝 proxy
+copyright: Copyright © 2026
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/renderer/**
+  - src/main/**
+  - src/preload/**
+  - package.json
+  - '!**/*.map'
+
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  requestedExecutionLevel: asInvoker
+  # icon: build/icon.ico
+
+# 没有代码签名证书，显式跳过签名；产物仍需右键「打开」绕过 Gatekeeper
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  identity: null
+  category: public.app-category.utilities
+
+dmg:
+  artifactName: ${name}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: true
+  perMachine: false
+  differentialPackage: true
+  artifactName: ${name}-Setup-${version}.${ext}
+
+# 自动更新走公开仓库的 Releases；私有仓库需要在客户端内置 PAT，不要那样做。
+publish:
+  provider: github
+  owner: 1263229887
+  repo: tongguanbao-proxy-desktop

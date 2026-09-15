@@ -1,0 +1,36 @@
+{
+  "name": "tongguanbao-proxy-desktop",
+  "productName": "通关宝 proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/main/index.js",
+  "packageManager": "pnpm@11.13.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "electron .",
+    "build": "vite build",
+    "dist:test": "node scripts/build.mjs --env=test --platforms=win,mac",
+    "dist:test:win": "node scripts/build.mjs --env=test --platforms=win",
+    "dist:prod": "node scripts/build.mjs --env=prod --platforms=win"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
+    "electron": "^44.3.0",
+    "electron-builder": "26.16.1",
+    "sass-embedded": "^1.104.0",
+    "unocss": "^66.10.0",
+    "vite": "^8.2.2",
+    "vue": "^3.5.42"
+  },
+  "description": "Windows 代理机客户端：鉴权后从后台拉取报文并落地到本机暂存目录",
+  "author": {
+    "name": "TODO-公司名"
+  }
+}

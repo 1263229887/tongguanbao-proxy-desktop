@@ -1,0 +1,55 @@
+/**
+ * 项目基础样式：只放 reset.scss 管不到的东西——应用级排版、滚动条、过渡。
+ * 原子类覆盖不到的伪元素选择器（滚动条）也归这里。
+ */
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  font-size: 13px;
+  color: #1f2937;
+  background: #f3f5f8;
+  -webkit-font-smoothing: antialiased;
+  // 桌面客户端外壳：正文不可选，输入框例外
+  user-select: none;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+
+  &:hover {
+    background-color: #94a3b8;
+  }
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.14s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
