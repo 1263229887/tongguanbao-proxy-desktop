@@ -14,6 +14,8 @@ const DEFAULTS = {
   appKey: '',
   tenantId: '',
   tag: '',
+  // 单一窗口导入客户端安装目录（下次打开自动带出）
+  swImportBasePath: '',
   // profiles / activeProfile 不放这里：loadConfig 用 {...DEFAULTS, ...文件} 展开，
   // 默认空组会盖住老配置里的顶层 apiUrl、appKey，让迁移失效
   maxConcurrentTasks: 3,
@@ -117,6 +119,7 @@ function normalize(raw) {
     apiUrl: CAN_EDIT_SERVER ? active.apiUrl : DEFAULT_API_URL.replace(/\/+$/, ''),
     appKey: active.appKey,
     tenantId: active.tenantId,
+    swImportBasePath: str(raw.swImportBasePath),
     profiles: CAN_EDIT_SERVER ? profiles : [normalizeProfile({ tag: '', apiUrl: DEFAULT_API_URL, appKey: active.appKey, tenantId: active.tenantId })],
     activeProfile,
     // 按业务类型一组四个目录 + 最大任务数；旧版顶层 dirs 会迁到 goods

@@ -31,6 +31,7 @@ watch(
   (val) => {
     if (!val || form.value) return
     form.value = { bizDirs: cloneBizDirs(val.bizDirs) }
+    if (val.swImportBasePath) importPath.value = val.swImportBasePath
     const open = {}
     const filled = BUSINESS_TYPES.filter((t) => countFilledDirs(val.bizDirs?.[t.id]) > 0)
     if (filled.length) for (const t of filled) open[t.id] = true
@@ -144,10 +145,24 @@ function onTasksInput(typeId) {
   scheduleSave(typeId)
 }
 
+async function persistImportPath(path) {
+  const next = String(path || '').trim()
+  try {
+    await saveConfig({ swImportBasePath: next })
+  } catch {
+    // 路径缓存失败不阻断导入
+  }
+}
+
 async function pickImportPath() {
   const picked = await window.intake.pickDir(importPath.value || undefined)
   if (!picked) return
   importPath.value = picked
+  importResult.value = null
+  await persistImportPath(picked)
+}
+
+function onImportPathInput() {
   importResult.value = null
 }
 
@@ -160,6 +175,7 @@ async function runImport() {
       notice.value = { tone: 'bad', text: '当前运行中的客户端没有导入接口，请完全退出后重新启动本软件再试。' }
       return
     }
+    await persistImportPath(importPath.value)
     const res = await window.intake.importSwDirs({ basePath: importPath.value || '' })
     importResult.value = res
     if (!res || !res.ok) {
@@ -228,7 +244,7 @@ const NOTICE_TONE = {
           请先启动「中国国际贸易单一窗口导入客户端」，并在其目录/任务管理里配置好各业务目录。导入会按业务类型匹配写入本软件，但<strong class="font-medium text-slate-600">不保证 100% 成功</strong>；即使提示导入成功，也请在双方软件里逐项核对目录是否一致，确认无误后再启动业务。导入失败或不想导入时，仍可手动填写。
         </p>
         <div class="flex flex-col sm:flex-row gap-2">
-          <input v-model="importPath" class="field flex-1 min-w-0" placeholder="对方安装文件夹，例如 E:\\中国电子口岸客户端控件" @input="importResult = null" />
+          <input v-model="importPath" class="field flex-1 min-w-0" placeholder="对方安装文件夹，例如 E:\\中国电子口岸客户端控件" @input="onImportPathInput" @change="persistImportPath(importPath)" />
           <button class="btn-ghost shrink-0" @click="pickImportPath">选择…</button>
           <button class="btn-primary shrink-0" :disabled="importing" @click="runImport">{{ importing ? '导入中…' : '一键导入' }}</button>
         </div>
