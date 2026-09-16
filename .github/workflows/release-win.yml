@@ -22,10 +22,20 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install
+        shell: pwsh
+        run: |
+          # electron-builder 会按 pnpm-lock 探测包管理器；CI 用 npm 时装成 npm 布局
+          if (Test-Path pnpm-lock.yaml) { Move-Item pnpm-lock.yaml pnpm-lock.yaml.ci-bak -Force }
+          npm install
 
       - name: Package Windows (test)
         run: node scripts/build.mjs --env=test --platforms=win
+
+      - name: Restore pnpm lockfile
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path pnpm-lock.yaml.ci-bak) { Move-Item pnpm-lock.yaml.ci-bak pnpm-lock.yaml -Force }
 
       - name: List artifacts
         shell: pwsh

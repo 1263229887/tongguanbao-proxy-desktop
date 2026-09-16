@@ -229,10 +229,16 @@ const bizCards = computed(() =>
           v-for="type in bizCards"
           :key="type.id"
           :ref="(el) => setCardEl(type.id, el)"
-          class="relative rounded-xl border transition-all duration-200"
+          class="relative rounded-xl border transition-all duration-200 overflow-hidden"
           :class="type.running ? 'biz-card-running' : 'border-slate-200 bg-white hover:border-slate-300'"
         >
           <div class="absolute inset-0 pointer-events-none rounded-xl opacity-0" :class="animating[type.id] ? 'biz-flash' : ''" />
+
+          <!-- 运行中：底部横向流光（明显且不刺眼） -->
+          <div v-if="type.running" class="biz-h-flow pointer-events-none absolute inset-x-0 bottom-0 h-[3px]" aria-hidden="true">
+            <span class="biz-h-bar" />
+          </div>
+          <div v-if="type.running" class="biz-h-sheen pointer-events-none absolute inset-0" aria-hidden="true" />
 
           <div class="relative flex items-center gap-3 px-4 py-3.5">
             <div class="min-w-0 flex-1 flex items-center gap-3 flex-wrap">
@@ -289,7 +295,40 @@ const bizCards = computed(() =>
 </template>
 
 <style scoped>
-/* 静态底色由 GSAP 控制；这里只保留非循环的一次性光效 */
+/* 运行中卡片底色（GSAP 会再叠阴影呼吸） */
+.biz-card-running {
+  background: #f3f8ff;
+  border-color: rgba(47, 111, 237, 0.35);
+}
+
+/* 底部横向流光条 */
+.biz-h-flow {
+  overflow: hidden;
+  background: rgba(47, 111, 237, 0.12);
+}
+
+.biz-h-bar {
+  display: block;
+  height: 100%;
+  width: 36%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, #2f6fed, #93c5fd, transparent);
+  animation: bizHBar 1.6s ease-in-out infinite;
+}
+
+/* 整卡轻微横向扫光 */
+.biz-h-sheen {
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    rgba(47, 111, 237, 0.08) 50%,
+    transparent 60%
+  );
+  background-size: 220% 100%;
+  animation: bizHSheen 2.4s linear infinite;
+  pointer-events: none;
+}
+
 .biz-flash {
   opacity: 1;
   background: radial-gradient(circle at 50% 50%, rgba(47, 111, 237, 0.3), transparent 60%);
@@ -316,6 +355,24 @@ const bizCards = computed(() =>
 
 .biz-btn-stop:hover {
   filter: brightness(1.05);
+}
+
+@keyframes bizHBar {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@keyframes bizHSheen {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -40% 0;
+  }
 }
 
 @keyframes bizStopGlow {

@@ -87,7 +87,7 @@ for (const [i, key] of platforms.entries()) {
 
   console.log(`\n[${i + 2}] 打包 ${key}（${env}）`)
   if (!dryRun) fs.rmSync(tmpDir, { recursive: true, force: true })
-  const args = [...target.args, `--config.directories.output=${tmpDir}`, `--config.extraMetadata.appEnv=${env}`]
+  const args = [...target.args, `--config.directories.output=${tmpDir}`, `--config.extraMetadata.appEnv=${env}`, '--publish', 'never']
   if (!run('npx', ['electron-builder', ...args], { dryRun })) fail(`${key} 打包失败`)
 
   if (dryRun) {
