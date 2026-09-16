@@ -37,8 +37,10 @@ dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 
 nsis:
+  # 向导安装：可选目录；仅当前用户，避免选「所有用户」后 UAC 失败静默退出
   oneClick: false
   perMachine: false
+  allowElevation: false
   allowToChangeInstallationDirectory: true
   differentialPackage: true
   artifactName: ${name}-Setup-${version}.${ext}
