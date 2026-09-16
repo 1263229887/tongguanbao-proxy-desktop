@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import electronUpdater from 'electron-updater'
+import { APP_ENV } from './env.js'
 import { error, info, warn } from './logger.js'
 
 const { autoUpdater } = electronUpdater
@@ -26,6 +27,8 @@ export function setupUpdater() {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.disableWebInstaller = true
+  // test/dev 包发布为 GitHub prerelease；不打开时 /releases/latest 会 406
+  autoUpdater.allowPrerelease = APP_ENV !== 'prod'
 
   autoUpdater.on('checking-for-update', () => patch({ status: 'checking', note: null }))
   autoUpdater.on('update-not-available', () => patch({ status: 'up-to-date', note: null }))
