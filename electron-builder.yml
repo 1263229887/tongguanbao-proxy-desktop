@@ -10,6 +10,7 @@ files:
   - dist/renderer/**
   - src/main/**
   - src/preload/**
+  - src/shared/**
   - package.json
   - '!**/*.map'
 
@@ -36,8 +37,9 @@ dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
+  allowToChangeInstallationDirectory: true
   differentialPackage: true
   artifactName: ${name}-Setup-${version}.${ext}
 
