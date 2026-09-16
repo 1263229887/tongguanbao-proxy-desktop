@@ -16,32 +16,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11
+          cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build renderer
-        run: pnpm exec vite build
+        run: pnpm install
 
       - name: Package Windows (test)
         run: node scripts/build.mjs --env=test --platforms=win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List artifacts
+        run: Get-ChildItem -Recurse release | Select-Object FullName, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tongguanbao-proxy-win-setup
-          path: release/**/*.exe
+          path: |
+            release/**/*.exe
           if-no-files-found: error
 
       - name: Create GitHub Release (tags only)
@@ -52,3 +52,4 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: true
+          fail_on_unmatched_files: true
