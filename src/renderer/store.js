@@ -78,7 +78,9 @@ export async function initStore() {
 }
 
 export async function saveConfig(patch) {
-  config.value = await window.intake.saveConfig(patch)
+  // 去掉 Vue 响应式 Proxy，避免 Electron IPC structured clone 失败
+  const plain = JSON.parse(JSON.stringify(patch ?? {}))
+  config.value = await window.intake.saveConfig(plain)
   autoStart.value = await window.intake.getAutoStart()
   return config.value
 }

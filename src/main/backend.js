@@ -1,4 +1,5 @@
 import { info, warn } from './logger.js'
+import { CAN_EDIT_SERVER } from './env.js'
 
 // 与后台通信的唯一出口：鉴权方式（签名 / 头字段名）将来只改这里。
 // TODO 请求路径、签名算法与响应字段以后台契约为准。
@@ -6,16 +7,19 @@ const TEST_PATH = '/api/tenant/verify'
 const TIMEOUT_MS = 10_000
 
 export function authHeaders(cfg) {
-  return {
+  const headers = {
     'content-type': 'application/json',
     'x-app-key': cfg.appKey
   }
+  if (cfg.tenantId) headers['x-tenant-id'] = cfg.tenantId
+  return headers
 }
 
 export function missingAccess(cfg) {
   const miss = []
-  if (!cfg.apiUrl) miss.push('后台地址')
-  if (!cfg.appKey) miss.push('APP KEY')
+  if (CAN_EDIT_SERVER && !cfg.apiUrl) miss.push('后台地址')
+  if (!cfg.tenantId) miss.push(CAN_EDIT_SERVER ? '租户ID' : '组合ID')
+  if (!cfg.appKey) miss.push(CAN_EDIT_SERVER ? 'APP KEY' : 'Proxy Key')
   return miss
 }
 

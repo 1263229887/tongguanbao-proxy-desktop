@@ -4,8 +4,8 @@ import { info, warn } from './logger.js'
 
 let timer = null
 let running = false
-// 用户启停意图：手动停止后，保存配置引起的内部重启不能再把轮询偷偷拉起
-let enabled = true
+// 用户启停意图：默认不启动，需人工点顶部栏；手动停止后，保存配置引起的内部重启不能再把轮询偷偷拉起
+let enabled = false
 let broadcast = () => {}
 
 const state = {

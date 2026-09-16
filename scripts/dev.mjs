@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
-import electronPath from 'electron'
+
+// Node ESM interop turns electron's CJS string export into {}; use require
+const electronPath = createRequire(import.meta.url)('electron')
 
 const PORT = 5273
 const server = await createServer({
@@ -10,9 +13,13 @@ const server = await createServer({
 })
 await server.listen()
 
+const childEnv = { ...process.env, ELECTRON_RENDERER_URL: `http://localhost:${PORT}` }
+// Host runtimes (e.g. MiMo's bundled Node) may set this; Electron would run as plain Node
+delete childEnv.ELECTRON_RUN_AS_NODE
+
 const child = spawn(electronPath, ['.'], {
   stdio: 'inherit',
-  env: { ...process.env, ELECTRON_RENDERER_URL: `http://localhost:${PORT}` }
+  env: childEnv
 })
 
 child.on('exit', (code) => {

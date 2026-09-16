@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted } from 'vue'
 import logo from './assets/logo.png'
 import HomeView from './views/HomeView.vue'
 import AccessView from './views/AccessView.vue'
@@ -25,17 +25,6 @@ const statusTone = {
 }
 
 onMounted(initStore)
-
-const toggling = ref(false)
-
-async function toggle() {
-  toggling.value = true
-  try {
-    pollState.value = pollState.value.polling ? await window.intake.stopPoll() : await window.intake.startPoll()
-  } finally {
-    toggling.value = false
-  }
-}
 </script>
 
 <template>
@@ -61,28 +50,12 @@ async function toggle() {
     <main class="flex-1 min-w-0 flex flex-col">
       <header class="h-14 shrink-0 flex items-center gap-2 px-5 border-b border-slate-200 bg-white">
         <h1 class="text-sm font-semibold">{{ NAV.find((n) => n.key === view)?.label }}</h1>
-        <div class="ml-auto flex items-center gap-3 text-xs text-slate-500">
-          <button
-            class="w-8 h-8 shrink-0 rounded-full border flex items-center justify-center transition-colors select-none disabled:opacity-50 disabled:pointer-events-none"
-            :class="pollState.polling ? 'bg-white border-rose-300 text-rose-500 hover:bg-rose-50' : 'bg-emerald-500 border-emerald-500 text-white hover:bg-emerald-600'"
-            :disabled="toggling"
-            :title="pollState.polling ? '点击停止代理机' : '点击启动代理机'"
-            @click="toggle"
-          >
-            <svg v-if="pollState.polling" class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M7.75 5h3.25v14H7.75zM13 5h3.25v14H13z" />
-            </svg>
-            <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M8.5 5.25v13.5L19 12z" />
-            </svg>
-          </button>
-          <div class="flex items-center gap-2">
-            <span
-              class="w-2 h-2 rounded-full"
-              :class="pollState.running ? statusTone.warn : pollState.lastError ? statusTone.bad : pollState.polling ? statusTone.ok : statusTone.idle"
-            />
-            <span>{{ pollState.running ? '轮询执行中' : pollState.lastError || (pollState.polling ? '轮询中' : '轮询未启动') }}</span>
-          </div>
+        <div class="ml-auto flex items-center gap-2 text-xs text-slate-500">
+          <span
+            class="w-2 h-2 rounded-full"
+            :class="pollState.running ? statusTone.warn : pollState.lastError ? statusTone.bad : pollState.polling ? statusTone.ok : statusTone.idle"
+          />
+          <span>{{ pollState.running ? '轮询执行中' : pollState.lastError || (pollState.polling ? '轮询中' : '按业务启动') }}</span>
         </div>
       </header>
 

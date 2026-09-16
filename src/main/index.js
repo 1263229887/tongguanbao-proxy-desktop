@@ -5,7 +5,7 @@ import { loadConfig } from './config.js'
 import { broadcast, registerIpc } from './ipc.js'
 import { closeLogger, error, info, initLogger, log, subscribe } from './logger.js'
 import { start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
-import { onStateChange as onPollState, resume as resumePoller, start as startPoller, stop as stopPoller } from './poller.js'
+import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
 import { checkForUpdates, onUpdateState, setupUpdater } from './updater.js'
 import { createTray, destroyTray } from './tray.js'
 
@@ -130,7 +130,7 @@ async function bootstrap() {
 
   info(`${app.name} ${app.getVersion()} 启动，日志目录 ${logDir}`, 'app')
   if (app.isPackaged) writeAutoStart(cfg.autoLaunch)
-  await startPoller()
+  // 轮询默认不自启，需用户在顶部栏手动点启动
   await startLogUpload()
   if (app.isPackaged) setTimeout(() => checkForUpdates(), 8_000)
 }

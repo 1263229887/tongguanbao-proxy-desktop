@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('intake', {
   saveConfig: (patch) => invoke('config:set', patch),
   checkDir: (args) => invoke('config:checkDir', args),
   pickDir: (defaultPath) => invoke('dialog:pickDir', defaultPath),
+  importSwDirs: (args) => invoke('sw:importDirs', args),
   testAccess: () => invoke('access:test'),
   getAutoStart: () => invoke('autostart:get'),
 

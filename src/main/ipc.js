@@ -8,6 +8,8 @@ import { run as runLogUpload } from './log-upload.js'
 import { clearLogs, getLogDir, getLogs, listLogFiles, readLogFile } from './logger.js'
 import { getState, runNow, start as startPoller, stop as stopPoller } from './poller.js'
 import { checkForUpdates, getUpdateState, quitAndInstall } from './updater.js'
+import { importSwBizDirs } from './sw-import.js'
+import { info, warn } from './logger.js'
 
 const STARTED_AT = Date.now()
 
@@ -27,6 +29,18 @@ export function registerIpc({ onConfigSaved } = {}) {
   })
 
   ipcMain.handle('config:checkDir', (_e, args) => checkDir(args?.dir, args))
+
+  ipcMain.handle('sw:importDirs', async (_e, args) => {
+    try {
+      const res = await importSwBizDirs(args?.basePath)
+      if (res?.ok) info(`单一窗口目录导入成功 source=${res.source} mapped=${Object.keys(res.mapped || {}).join(',')}`, 'access')
+      else warn(`单一窗口目录导入失败：${res?.reason}`, 'access')
+      return res
+    } catch (e) {
+      warn(`单一窗口目录导入异常：${e.stack || e.message}`, 'access')
+      return { ok: false, reason: e.message, source: null, mapped: {}, matchedFormIds: [], unmatchedFormIds: [] }
+    }
+  })
 
   ipcMain.handle('dialog:pickDir', async (e, defaultPath) => {
     const win = BrowserWindow.fromWebContents(e.sender)
