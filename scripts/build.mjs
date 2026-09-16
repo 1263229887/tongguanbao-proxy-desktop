@@ -39,8 +39,25 @@ function parse(argv) {
 function run(cmd, args, opts = {}) {
   console.log(`  $ ${cmd} ${args.join(' ')}`)
   if (opts.dryRun) return true
-  const res = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' })
-  return !res.status
+  // shell:false，避免路径空格（如 Xiaomi MiMo）被拆开
+  const res = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', shell: false })
+  return !res.error && !res.status
+}
+
+// 优先用显式 Node 可执行文件；避免 process.execPath 指向宿主 GUI
+function nodeExe() {
+  return process.env.MIMO_NODE || process.execPath
+}
+
+function toolCmd(kind) {
+  const candidates =
+    kind === 'vite'
+      ? [path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')]
+      : [path.join(ROOT, 'node_modules', 'electron-builder', 'out', 'cli.js'), path.join(ROOT, 'node_modules', 'electron-builder', 'cli.js')]
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return { cmd: nodeExe(), args: [c] }
+  }
+  return { cmd: 'npx', args: [] }
 }
 
 // 每次打包前彻底清空产物根目录，避免旧包和新包混在一起
@@ -78,7 +95,10 @@ console.log(`\n打包开始 · 环境=${env} · 平台=${platforms.join(', ')}${
 cleanOutRoot(dryRun)
 
 console.log('\n[1] 构建渲染层')
-if (!run('npx', ['vite', 'build'], { dryRun })) fail('渲染层构建失败')
+{
+  const t = toolCmd('vite')
+  if (!run(t.cmd, [...t.args, 'build'], { dryRun })) fail('渲染层构建失败')
+}
 
 for (const [i, key] of platforms.entries()) {
   const target = PLATFORMS[key]
@@ -87,13 +107,33 @@ for (const [i, key] of platforms.entries()) {
 
   console.log(`\n[${i + 2}] 打包 ${key}（${env}）`)
   if (!dryRun) fs.rmSync(tmpDir, { recursive: true, force: true })
-  const args = [...target.args, `--config.directories.output=${tmpDir}`, `--config.extraMetadata.appEnv=${env}`, '--publish', 'never']
-  if (!run('npx', ['electron-builder', ...args], { dryRun })) fail(`${key} 打包失败`)
 
   if (dryRun) {
-    console.log(`  (dry-run) 将移动到 ${path.relative(ROOT, finalDir)}/`)
+    console.log(`  (dry-run) electron-builder ${target.args.join(' ')} → ${path.relative(ROOT, tmpDir)}`)
     continue
   }
+
+  // 走 Node API，避免 CLI/yargs 在精简 Node 环境下把脚本路径当成参数
+  const eb = await import('electron-builder')
+  const { build, Platform, Arch } = eb
+  try {
+    const targets =
+      key === 'win'
+        ? Platform.WINDOWS.createTarget(['nsis'], Arch.x64)
+        : Platform.MAC.createTarget(['dmg'], Arch.arm64)
+    await build({
+      targets,
+      config: {
+        directories: { output: tmpDir },
+        extraMetadata: { appEnv: env }
+      },
+      publish: null
+    })
+  } catch (e) {
+    console.error(e)
+    fail(`${key} 打包失败`)
+  }
+
   if (!fs.existsSync(tmpDir)) fail(`electron-builder 没有产出 ${path.relative(ROOT, tmpDir)}`)
   fs.mkdirSync(path.dirname(finalDir), { recursive: true })
   fs.rmSync(finalDir, { recursive: true, force: true })
