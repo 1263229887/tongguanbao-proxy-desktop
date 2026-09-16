@@ -24,8 +24,9 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          # electron-builder 会按 pnpm-lock 探测包管理器；CI 用 npm 时装成 npm 布局
+          # electron-builder 会按 lockfile / packageManager 探测包管理器；CI 统一用 npm
           if (Test-Path pnpm-lock.yaml) { Move-Item pnpm-lock.yaml pnpm-lock.yaml.ci-bak -Force }
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.packageManager;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
           npm install
 
       - name: Package Windows (test)
