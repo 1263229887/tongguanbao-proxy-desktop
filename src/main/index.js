@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { app, BrowserWindow, nativeImage } from 'electron'
+import { app, BrowserWindow, nativeImage, session, globalShortcut } from 'electron'
 import { write as writeAutoStart } from './autostart.js'
 import { loadConfig } from './config.js'
 import { broadcast, registerIpc } from './ipc.js'
@@ -8,6 +8,7 @@ import { start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
 import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
 import { checkForUpdates, onUpdateState, setupUpdater } from './updater.js'
 import { createTray, destroyTray } from './tray.js'
+import { APP_ENV } from './env.js'
 
 const DEV_URL = process.env.ELECTRON_RENDERER_URL
 let win = null
@@ -24,6 +25,38 @@ function attachDiagnostics(target) {
   })
   wc.on('render-process-gone', (_e, details) => error(`渲染进程异常退出 reason=${details.reason} code=${details.exitCode}`, 'renderer'))
   wc.on('did-fail-load', (_e, code, desc, url) => error(`页面加载失败 ${code} ${desc} ${url}`, 'renderer'))
+}
+
+// 渲染进程直接请求后台时需要放行 CORS；生产同样依赖渲染进程发请求。
+function setupNetworkRelax() {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = details.responseHeaders || {}
+    callback({
+      responseHeaders: {
+        ...headers,
+        'Access-Control-Allow-Origin': ['*'],
+        'Access-Control-Allow-Methods': ['GET,POST,PUT,DELETE,OPTIONS'],
+        'Access-Control-Allow-Headers': ['*']
+      }
+    })
+  })
+}
+
+function setupDevToolsShortcut() {
+  // 生产无菜单栏也可 Ctrl+Shift+I 打开调试台（Network 查看轮询请求）
+  try {
+    globalShortcut.register('CommandOrControl+Shift+I', () => {
+      if (!win || win.isDestroyed()) return
+      if (win.webContents.isDevToolsOpened()) win.webContents.closeDevTools()
+      else win.webContents.openDevTools({ mode: 'detach' })
+    })
+  } catch (e) {
+    warnShortcut(e)
+  }
+}
+
+function warnShortcut(e) {
+  error(`注册调试台快捷键失败：${e.message}`, 'app')
 }
 
 function showMainWindow() {
@@ -56,9 +89,13 @@ function createWindow() {
       preload: path.join(import.meta.dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      // sandbox 关闭以便 preload 稳定桥接；网络仍只在渲染进程用 axios
+      sandbox: false,
+      // 放行跨域，渲染进程才能直连后台 HTTPS
+      webSecurity: false,
       spellcheck: false,
-      devTools: !app.isPackaged,
+      // 生产也允许打开 DevTools（快捷键），便于现场排障
+      devTools: true,
       backgroundThrottling: false
     }
   })
@@ -80,6 +117,13 @@ function createWindow() {
     }
   })
 
+  // 开发/测试包默认打开调试台，方便直接看 Network
+  if (!app.isPackaged || APP_ENV !== 'prod') {
+    win.webContents.once('did-finish-load', () => {
+      win?.webContents.openDevTools({ mode: 'detach' })
+    })
+  }
+
   if (DEV_URL) win.loadURL(DEV_URL)
   else win.loadFile(path.join(import.meta.dirname, '../../dist/renderer/index.html'))
 }
@@ -90,8 +134,8 @@ function setupJumpList() {
   if (process.platform !== 'win32') return
   app.setJumpList([
     {
-      type: 'custom',
-      title: app.name,
+      // 分隔符只允许出现在标准 Tasks 分组；自定义分组带 separator 会报错
+      type: 'tasks',
       items: [
         { type: 'task', title: '打开主界面', program: process.execPath, args: '--show', description: '打开主界面' },
         { type: 'separator' },
@@ -110,6 +154,8 @@ async function bootstrap() {
   const cfg = await loadConfig()
   const logDir = initLogger({ days: cfg.logKeepDays })
 
+  setupNetworkRelax()
+
   subscribe((entry) => broadcast('log:entry', entry))
   onPollState((state) => broadcast('poll:state', state))
   onUpdateState((state) => broadcast('update:state', state))
@@ -127,10 +173,12 @@ async function bootstrap() {
   setupJumpList()
   createWindow()
   createTray({ showWindow: showMainWindow, quit: quitApp })
+  setupDevToolsShortcut()
 
-  info(`${app.name} ${app.getVersion()} 启动，日志目录 ${logDir}`, 'app')
+  info(`${app.name} ${app.getVersion()} 启动，env=${APP_ENV}，日志目录 ${logDir}`, 'app')
+  info(`企业鉴权密钥已本地缓存于 userData/config.json（升级重装不丢）`, 'app')
   if (app.isPackaged) writeAutoStart(cfg.autoLaunch)
-  // 轮询默认不自启，需用户在顶部栏手动点启动
+  // 代理默认不自启，需用户在首页点「启动」
   await startLogUpload()
   if (app.isPackaged) setTimeout(() => checkForUpdates(), 8_000)
 }
@@ -147,6 +195,12 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(bootstrap)
+
+  app.on('will-quit', () => {
+    try {
+      globalShortcut.unregisterAll()
+    } catch {}
+  })
 
   app.on('activate', () => {
     if (!BrowserWindow.getAllWindows().length) createWindow()

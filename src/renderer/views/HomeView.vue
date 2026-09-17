@@ -6,11 +6,23 @@ import { config, go, meta, pollState } from '../store.js'
 import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs } from '../../shared/biz-types.js'
 import { bizRun, isRunning, missingDirs, runningCount, startBiz, stopBiz } from '../biz-run.js'
 
+// 主进程代理状态与首页「货物申报」卡片对齐
+watch(
+  () => [pollState.value.running, pollState.value.enabled],
+  ([running, enabled]) => {
+    const on = !!(running || enabled)
+    bizRun.goods.running = on
+    if (on && !bizRun.goods.startedAt) bizRun.goods.startedAt = Date.now()
+    if (!on) bizRun.goods.startedAt = null
+  },
+  { immediate: true }
+)
+
 const GUIDE = [
-  { view: 'access', label: '权限配置', desc: '填写后台按租户下发的凭证（生产包为组合ID与Proxy Key）。保存后可点「测试访问」确认能否连通。' },
-  { view: 'dir', label: '目录配置', desc: '按业务类型设置落地目录与并发数，可从单一窗口一键导入，也可手动填写。目录必须与对方完全一致。' },
-  { view: 'param', label: '参数配置', desc: '轮询间隔、开机自动启动、日志保留天数。' },
-  { view: 'about', label: '保持运行与更新', desc: '关闭主窗口后程序仍在后台；彻底退出请在托盘图标上右键。' }
+  { view: 'access', label: '权限配置', desc: '填写企业鉴权密钥（sk-…）。测试环境服务器地址可留空，将自动使用 https://www.tel365.com:8088。保存后可点「测试访问」确认能否连通。' },
+  { view: 'dir', label: '目录配置', desc: '货物申报请配置统一 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入。目录必须与对方完全一致。' },
+  { view: 'param', label: '参数配置', desc: '轮询间隔、回执/心跳间隔、开机自动启动、日志保留。本地开发可打开调试控制台查看 Network。' },
+  { view: 'about', label: '保持运行与更新', desc: '关闭主窗口后程序仍在后台；彻底退出请在托盘图标上右键。生产环境可用 Ctrl+Shift+I 打开调试台。' }
 ]
 
 const now = ref(Date.now())
@@ -170,7 +182,8 @@ const bizCards = computed(() =>
       total: DIR_FIELDS.length,
       tasks: entry?.maxConcurrentTasks ?? '—',
       running: isRunning(t.id),
-      miss: missingDirs(t.id)
+      miss: missingDirs(t.id),
+      real: t.id === 'goods'
     }
   })
 )
@@ -187,7 +200,11 @@ const bizCards = computed(() =>
         :hint="connectedState.tone === 'bad' ? pollState.lastError : ''"
       />
       <StatusTile label="启动后运行时长" :value="uptime" hint="自本次程序启动计时" />
-      <StatusTile label="已处理报文数量" :value="String(pollState.processed ?? 0)" hint="自本次程序启动累计" />
+      <StatusTile
+        label="已投递 / 已归档回执"
+        :value="`${pollState.delivered ?? 0} / ${pollState.receipts ?? 0}`"
+        hint="自本次程序启动累计；处理数见日志"
+      />
     </div>
 
     <div class="panel px-4 py-3 border-amber-200 bg-amber-50/70 shrink-0">
@@ -241,6 +258,7 @@ const bizCards = computed(() =>
               <div class="flex items-baseline gap-2 min-w-0">
                 <span class="text-sm font-semibold" :class="type.running ? 'text-slate-900' : 'text-slate-800'">{{ type.title }}</span>
                 <span v-if="type.subtitle !== type.title" class="text-xs text-slate-400">{{ type.subtitle }}</span>
+                <span v-if="type.real" class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">真实对接</span>
               </div>
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
                 <span :class="type.filled === type.total ? 'text-brand-600' : 'text-amber-600'">

@@ -2,6 +2,8 @@ import path from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { read as readAutoStart } from './autostart.js'
 import { testConnection } from './backend.js'
+import { getAgentState, runAgentOnce, startAgent, stopAgent } from './agent.js'
+import { setupNetBridge } from './net-bridge.js'
 import { APP_ENV } from './env.js'
 import { checkDir, loadConfig, saveConfig } from './config.js'
 import { run as runLogUpload } from './log-upload.js'
@@ -20,6 +22,8 @@ function broadcast(channel, payload) {
 }
 
 export function registerIpc({ onConfigSaved } = {}) {
+  setupNetBridge()
+
   ipcMain.handle('config:get', () => loadConfig())
 
   ipcMain.handle('config:set', async (_e, patch) => {
@@ -61,6 +65,10 @@ export function registerIpc({ onConfigSaved } = {}) {
   ipcMain.handle('poll:stop', () => stopPoller())
   ipcMain.handle('poll:run', () => runNow())
   ipcMain.handle('poll:state', () => getState())
+  ipcMain.handle('agent:start', () => startAgent())
+  ipcMain.handle('agent:stop', () => stopAgent())
+  ipcMain.handle('agent:run', () => runAgentOnce())
+  ipcMain.handle('agent:state', () => getAgentState())
 
   ipcMain.handle('logs:get', () => getLogs())
   ipcMain.handle('logs:clear', () => clearLogs())
@@ -69,6 +77,14 @@ export function registerIpc({ onConfigSaved } = {}) {
   ipcMain.handle('logs:dir', () => getLogDir())
   ipcMain.handle('logs:open', () => getLogDir() && shell.openPath(getLogDir()))
   ipcMain.handle('logs:upload-now', () => runLogUpload())
+
+  // 生产也可用快捷键/此接口开 DevTools，Network 看轮询请求
+  ipcMain.handle('devtools:open', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return false
+    win.webContents.openDevTools({ mode: 'detach' })
+    return true
+  })
 
   ipcMain.handle('app:meta', () => ({
     startedAt: STARTED_AT,

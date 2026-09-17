@@ -16,5 +16,5 @@ function resolveEnv() {
 
 export const APP_ENV = resolveEnv()
 
-// dev 与 test 允许配置后台地址和多组服务器；prod 只允许填 APP KEY
+// dev 与 test 允许配置后台地址、实例名和多组服务器；prod 只允许填企业鉴权密钥
 export const CAN_EDIT_SERVER = APP_ENV !== 'prod'

@@ -5,9 +5,10 @@
     <link rel="icon" href="./src/renderer/assets/logo.png" />
     <title>通关宝 proxy</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- connect-src 必须放行 http(s)：所有后端请求（拉取/回报/回执/心跳）都从渲染进程发出，且服务器地址用户可配置 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: https: http:"
     />
   </head>
   <body>

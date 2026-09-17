@@ -21,7 +21,20 @@ export const UPDATE_TEXT = {
 export const view = ref('home')
 export const meta = ref(null)
 export const config = ref(null)
-export const pollState = ref({ polling: false, running: false, lastTickAt: null, lastError: null, tickCount: 0 })
+export const pollState = ref({
+  polling: false,
+  running: false,
+  enabled: false,
+  connected: null,
+  processed: 0,
+  delivered: 0,
+  receipts: 0,
+  lastTickAt: null,
+  lastHeartbeatAt: null,
+  lastError: null,
+  tickCount: 0,
+  instanceName: ''
+})
 export const logs = ref([])
 export const logFiles = ref([])
 export const logDir = ref('')

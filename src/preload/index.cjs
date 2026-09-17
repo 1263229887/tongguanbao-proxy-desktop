@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('intake', {
   stopPoll: () => invoke('poll:stop'),
   runPoll: () => invoke('poll:run'),
   getPollState: () => invoke('poll:state'),
+  startAgent: () => invoke('agent:start'),
+  stopAgent: () => invoke('agent:stop'),
 
   getLogs: () => invoke('logs:get'),
   clearLogs: () => invoke('logs:clear'),
@@ -32,10 +34,16 @@ contextBridge.exposeInMainWorld('intake', {
   openLogDir: () => invoke('logs:open'),
   uploadLogsNow: () => invoke('logs:upload-now'),
 
+  openDevTools: () => invoke('devtools:open'),
+
   getMeta: () => invoke('app:meta'),
   checkUpdate: () => invoke('update:check'),
   getUpdateState: () => invoke('update:state'),
   installUpdate: () => invoke('update:install'),
+
+  // 主进程 → 渲染进程：发起 HTTP
+  onNetRequest: listen('net:do-request'),
+  sendNetResult: (result) => ipcRenderer.send('net:request-result', result),
 
   onLogEntry: listen('log:entry'),
   onPollState: listen('poll:state'),

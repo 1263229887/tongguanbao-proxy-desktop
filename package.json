@@ -18,6 +18,7 @@
     "dist:prod": "node scripts/build.mjs --env=prod --platforms=win"
   },
   "dependencies": {
+    "axios": "^1.20.0",
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
@@ -29,7 +30,7 @@
     "vite": "^8.2.2",
     "vue": "^3.5.42"
   },
-  "description": "Windows 代理机客户端：鉴权后从后台拉取报文并落地到本机暂存目录",
+  "description": "Windows 前置机代理：企业鉴权后拉取报关单暂存任务，原子写入单一窗口 OutBox 并上传 InBox 回执",
   "author": {
     "name": "TODO-公司名"
   }
