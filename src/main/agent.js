@@ -27,7 +27,8 @@ import {
 } from './ledger.js'
 import { debug, error, info, warn } from './logger.js'
 
-// 真实代理引擎：拉取 DECCUS001 → 原子写 OutBox → 回报状态 → 轮询 InBox 上传回执 → 心跳。
+// 真实代理引擎（文档 v1.3）：拉取 DECCUS001 → 原子写 OutBox → 回报状态 → 轮询 InBox 上传回执 → 心跳。
+// 回执只读不移动：以 SHA-256 为唯一标识，处理状态入 SQLite 账本（ACKED_MATCHED/ACKED_UNMATCHED/RETRY_PENDING/PERMANENT_REJECTED）。
 
 const SUPPORTED_MODULE = 'DECCUS001'
 const TRADE_MODES = ['export', 'import', '9610']
@@ -57,6 +58,7 @@ let taskBusy = false
 let inboxBusy = false
 let heartbeatBusy = false
 let ledgerReady = false
+let clockOffsetWarned = false
 
 function patch(values) {
   Object.assign(state, values)
@@ -189,6 +191,7 @@ async function deliverTask(cfg, task) {
     })
     if (rep.ok) {
       await upsertTask({ taskId, xmlSha256, reportOk: true })
+      info(`状态回报成功（账本去重回补）taskId=${taskId}`, 'deliver')
       patch({ processed: state.processed + 1 })
     }
     return { ok: true, dedup: true }
@@ -229,6 +232,7 @@ async function deliverTask(cfg, task) {
         })
         if (rep.ok) {
           await upsertTask({ taskId, xmlSha256, reportOk: true })
+          info(`状态回报成功（正式文件已存在补记）taskId=${taskId}`, 'deliver')
           patch({ processed: state.processed + 1, delivered: state.delivered + 1 })
         }
         return { ok: true }
@@ -290,6 +294,7 @@ async function deliverTask(cfg, task) {
       return { ok: false, deliveredButReportFailed: true, reason: rep.msg }
     }
     await upsertTask({ taskId, xmlSha256, reportOk: true })
+    info(`状态回报成功 OUTBOX_DROPPED taskId=${taskId}`, 'deliver')
     patch({ processed: state.processed + 1, delivered: state.delivered + 1, lastError: null })
     return { ok: true }
   } catch (e) {
@@ -336,10 +341,7 @@ async function tickTasks() {
   }
 
   // 鉴权失败 / 通道关闭时降频，不拉新任务
-  if (state.authFailed || state.channelClosed) {
-    debug('鉴权失败或通道关闭，本轮跳过拉取', 'pull')
-    return
-  }
+  if (state.authFailed || state.channelClosed) return
 
   taskBusy = true
   patch({ lastTickAt: Date.now() })
@@ -365,6 +367,8 @@ async function tickTasks() {
         warn(`前置机通道关闭：${res.msg}`, 'pull')
         return
       }
+      // 例行失败不逐条刷屏：从连通转为失败时告警一次
+      if (state.connected !== false) warn(`拉取任务失败：${res.msg}`, 'pull')
       return patch({ connected: false, lastError: res.msg })
     }
 
@@ -372,6 +376,10 @@ async function tickTasks() {
 
     for (const task of res.tasks || []) {
       if (!state.enabled) break
+      info(
+        `领取任务入队 taskId=${task.taskId} sha=${String(task.xmlSha256 || '').slice(0, 12)} file=${task.fileName}`,
+        'pull'
+      )
       await deliverTask(cfg, task)
     }
 
@@ -415,42 +423,69 @@ async function scanInboxOnce(dir) {
   return out
 }
 
-async function processInboxFile(cfg, file, dirs) {
+/** 文档 §7.3.5：路径+大小+mtime 不变时复用 SHA-256，避免每轮对 InBox 全量读盘 */
+const shaCache = new Map()
+
+/** 已终态（ACKED_* / PERMANENT_REJECTED）回执的内存跳过表：内容变化后自动失效，重新按新 SHA 处理 */
+const settled = new Map()
+
+async function fileSha(file) {
+  const hit = shaCache.get(file.full)
+  if (hit && hit.size === file.size && hit.mtime === file.mtime) return hit.sha
   const buf = await fs.readFile(file.full)
   const sha = sha256Hex(buf)
-  const prev = getReceiptRecord(file.full, sha)
-  if (prev?.status === 'UPLOADED') {
-    debug(`回执已上传过，跳过 ${file.name}`, 'receipt')
-    return
-  }
-  if (prev?.status === 'UNMATCHED') {
-    // 未匹配过的不反复打接口，等人工/后端处理
-    return
-  }
-  if (prev?.status === 'FAILED_CONTENT') {
-    return
+  shaCache.set(file.full, { size: file.size, mtime: file.mtime, sha })
+  return sha
+}
+
+/** 指数退避：1s 起步、×2、封顶 60s，加 0~20% 随机抖动（文档 §10） */
+function backoffMs(retryCount) {
+  const base = Math.min(60_000, 1_000 * 2 ** Math.max(0, retryCount))
+  return Math.round(base * (1 + Math.random() * 0.2))
+}
+
+/**
+ * 回执处理（文档 v1.3 §7.3）：只读 InBox 文件，绝不移动/重命名/删除（§7.3.4）。
+ * 以 XML 原始字节 SHA-256 为唯一标识（§7.3.5），结果按 §7.3 响应矩阵写入 SQLite 账本：
+ * matched=true（duplicate 任意）→ ACKED_MATCHED；matched=false → ACKED_UNMATCHED；
+ * 1050000204/205 或本地大小预检不过 → PERMANENT_REJECTED；网络/临时错误 → RETRY_PENDING 指数退避。
+ */
+async function processInboxFile(cfg, file) {
+  const sha = await fileSha(file)
+  const rec = getReceiptRecord(sha)
+  if (rec) {
+    if (rec.state !== 'RETRY_PENDING') {
+      settled.set(file.full, { size: file.size, mtime: file.mtime })
+      debug(`回执已处理（${rec.state}），跳过 ${file.name} sha=${sha.slice(0, 12)}`, 'receipt')
+      return
+    }
+    if (Date.now() < (rec.nextRetryAt ?? 0)) return
   }
 
-  if (buf.length > 3 * 1024 * 1024) {
-    warn(`回执超过 3MiB，移入 failed：${file.name}`, 'receipt')
-    await upsertReceipt({ path: file.full, sha256: sha, fileName: file.name, status: 'FAILED_CONTENT', message: 'oversize' })
-    const dest = path.join(dirs.failBox, file.name)
-    await fs.mkdir(dirs.failBox, { recursive: true })
-    await fs.rename(file.full, dest).catch(() => {})
-    return
+  const buf = await fs.readFile(file.full)
+  const common = {
+    xmlSha256: sha,
+    fullPath: file.full,
+    fileName: file.name,
+    size: file.size,
+    mtime: file.mtime,
+    lastAttemptAt: Date.now(),
+    firstSeenAt: rec?.firstSeenAt ?? Date.now(),
+    retryCount: rec?.retryCount ?? 0
   }
 
-  const b64 = buf.toString('base64')
-  if (b64.length > 4 * 1024 * 1024) {
-    warn(`回执 Base64 超过 4MiB，移入 failed：${file.name}`, 'receipt')
-    await upsertReceipt({ path: file.full, sha256: sha, fileName: file.name, status: 'FAILED_CONTENT', message: 'oversize-b64' })
-    await fs.mkdir(dirs.failBox, { recursive: true })
-    await fs.rename(file.full, path.join(dirs.failBox, file.name)).catch(() => {})
+  // 本地大小预检（对应后端 1050000205，重试无意义）：记永久拒绝，文件留在 InBox
+  const b64 = buf.length > 3 * 1024 * 1024 ? null : buf.toString('base64')
+  if (!b64 || b64.length > 4 * 1024 * 1024) {
+    warn(`回执超过大小限制（解码 3MiB / Base64 4MiB），记为永久拒绝，文件保留在 InBox：${file.name}`, 'receipt')
+    await upsertReceipt({ ...common, state: 'PERMANENT_REJECTED', message: '本地预检：回执超过大小限制' })
+    settled.set(file.full, { size: file.size, mtime: file.mtime })
+    patch({ lastError: `回执 ${file.name} 超过大小限制，待客户处理` })
     return
   }
 
   const receivedAt = formatDateTime(new Date(file.mtime))
-  info(`上传回执 ${file.name} size=${buf.length}`, 'receipt')
+  info(`上传回执 ${file.name} size=${buf.length} retry=${common.retryCount}`, 'receipt')
   const res = await uploadReceipt(cfg, {
     fileName: file.name,
     receivedAt,
@@ -459,62 +494,51 @@ async function processInboxFile(cfg, file, dirs) {
 
   if (!res.ok) {
     if (res.code === BIZ_CODE.RECEIPT_INVALID || res.code === BIZ_CODE.RECEIPT_TOO_LARGE) {
-      warn(`回执内容非法/过大，移入 failed：${file.name} ${res.msg}`, 'receipt')
-      await upsertReceipt({
-        path: file.full,
-        sha256: sha,
-        fileName: file.name,
-        status: 'FAILED_CONTENT',
-        message: res.msg
-      })
-      await fs.mkdir(dirs.failBox, { recursive: true })
-      await fs.rename(file.full, path.join(dirs.failBox, file.name)).catch(() => {})
-      patch({ lastError: `回执 ${file.name}：${res.msg}` })
+      warn(`回执被后端拒绝（code=${res.code}），记为永久拒绝，文件保留在 InBox：${file.name} ${res.msg}`, 'receipt')
+      await upsertReceipt({ ...common, state: 'PERMANENT_REJECTED', message: res.msg })
+      settled.set(file.full, { size: file.size, mtime: file.mtime })
+      patch({ lastError: `回执 ${file.name} 被拒绝：${res.msg}` })
       return
     }
     if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {
       patch({ authFailed: true, lastError: res.msg })
       return
     }
-    // 网络/临时错误：保留原文件重试
-    warn(`回执上传失败，保留重试：${file.name} ${res.msg}`, 'receipt')
+    // 网络异常、响应未知或可重试的服务端错误：RETRY_PENDING + 指数退避，文件始终留在 InBox
+    const retryCount = common.retryCount + 1
+    const delay = backoffMs(retryCount)
+    warn(`回执上传失败，约 ${Math.round(delay / 1000)}s 后重试（第 ${retryCount} 次）：${file.name} ${res.msg}`, 'receipt')
+    await upsertReceipt({
+      ...common,
+      retryCount,
+      state: 'RETRY_PENDING',
+      message: res.msg,
+      nextRetryAt: Date.now() + delay
+    })
     patch({ lastError: `回执上传失败：${res.msg}` })
     return
   }
 
   const data = res.data || {}
-  if (data.duplicate || data.matched) {
+  if (data.matched) {
     await upsertReceipt({
-      path: file.full,
-      sha256: sha,
-      fileName: file.name,
-      status: 'UPLOADED',
-      message: data.duplicate ? 'duplicate' : `matched task ${data.taskId}`
+      ...common,
+      state: 'ACKED_MATCHED',
+      taskId: data.taskId ?? null,
+      customsStatus: data.customsStatus ?? null,
+      message: data.duplicate ? 'duplicate' : 'matched',
+      nextRetryAt: null
     })
-    await fs.mkdir(dirs.sentBox, { recursive: true })
-    const dest = path.join(dirs.sentBox, file.name)
-    // 目标重名则加时间后缀
-    const exists = await fs.stat(dest).then(() => true).catch(() => false)
-    const finalDest = exists ? path.join(dirs.sentBox, `${Date.now()}_${file.name}`) : dest
-    await fs.rename(file.full, finalDest).catch(async () => {
-      // 跨盘失败则 copy+unlink
-      await fs.copyFile(file.full, finalDest)
-      await fs.unlink(file.full)
-    })
-    info(`回执已归档 ${file.name} → ${path.basename(finalDest)} matched=${!!data.matched} duplicate=${!!data.duplicate}`, 'receipt')
+    settled.set(file.full, { size: file.size, mtime: file.mtime })
+    info(`回执已确认 taskId=${data.taskId} status=${data.customsStatus} duplicate=${!!data.duplicate} ${file.name}`, 'receipt')
     patch({ receipts: state.receipts + 1, lastError: null })
     return
   }
 
-  // matched=false：后端已留档但未匹配业务，不归档、不重试，告警等核查
-  warn(`回执未匹配到业务任务，保留原文件：${file.name}`, 'receipt')
-  await upsertReceipt({
-    path: file.full,
-    sha256: sha,
-    fileName: file.name,
-    status: 'UNMATCHED',
-    message: 'matched=false'
-  })
+  // matched=false（无论 duplicate）：后端已接收但未匹配任务，停止自动重传并告警（§7.3.8）
+  warn(`回执未匹配到任务（ACKED_UNMATCHED），文件保留在 InBox 待人工核查：${file.name}`, 'receipt')
+  await upsertReceipt({ ...common, state: 'ACKED_UNMATCHED', message: 'matched=false', nextRetryAt: null })
+  settled.set(file.full, { size: file.size, mtime: file.mtime })
   patch({ lastError: `回执未匹配：${file.name}` })
 }
 
@@ -532,6 +556,9 @@ async function tickInbox() {
     const now = Date.now()
     const ready = []
     for (const f of files) {
+      // 已终态且内容未变的文件直接跳过，不再进入稳定判定和处理
+      const done = settled.get(f.full)
+      if (done && done.size === f.size && done.mtime === f.mtime) continue
       const key = inboxEntryKey(f.full)
       const prev = inboxStable.get(key)
       if (prev && prev.size === f.size && prev.mtime === f.mtime && now - prev.seenAt >= 1500) {
@@ -540,26 +567,24 @@ async function tickInbox() {
         inboxStable.set(key, { size: f.size, mtime: f.mtime, seenAt: now })
       }
     }
-    // 清理已消失文件的稳定记录
+    // 清理已消失文件的稳定记录与 SHA 缓存
     const live = new Set(files.map((f) => f.full))
     for (const k of inboxStable.keys()) {
       if (!live.has(k)) inboxStable.delete(k)
     }
+    for (const k of shaCache.keys()) {
+      if (!live.has(k)) shaCache.delete(k)
+    }
+    for (const k of settled.keys()) {
+      if (!live.has(k)) settled.delete(k)
+    }
 
     if (!ready.length) return
-
-    try {
-      await ensureWritableDir(dirs.sentBox, '归档目录')
-      await ensureWritableDir(dirs.failBox, '失败目录')
-    } catch (e) {
-      warn(`归档/失败目录不可用：${e.message}`, 'receipt')
-      return
-    }
 
     for (const f of ready) {
       if (!state.enabled) break
       try {
-        await processInboxFile(cfg, f, dirs)
+        await processInboxFile(cfg, f)
       } catch (e) {
         error(`处理回执异常 ${f.name}：${e.message}`, 'receipt')
       }
@@ -623,7 +648,14 @@ async function tickHeartbeat() {
       const serverTs = parseDateTime(nowText)
       if (serverTs != null) {
         state.clockOffsetMs = serverTs - Date.now()
-        debug(`服务器时钟偏移 ${state.clockOffsetMs}ms now=${nowText}`, 'heartbeat')
+        // 时钟偏移属异常才告警（租约判断依赖时钟），恢复正常自动解除
+        const skewed = Math.abs(state.clockOffsetMs) > 120_000
+        if (skewed && !clockOffsetWarned) {
+          warn(`与服务器时钟偏移 ${Math.round(state.clockOffsetMs / 1000)}s，租约判断可能受影响，请校准本机时间（建议 NTP）`, 'heartbeat')
+          clockOffsetWarned = true
+        } else if (!skewed) {
+          clockOffsetWarned = false
+        }
       }
     }
     patch({

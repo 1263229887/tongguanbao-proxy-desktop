@@ -2,10 +2,11 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import { effectiveApiUrl } from './config.js'
 import { requestViaRenderer } from './net-bridge.js'
-import { debug, info, warn } from './logger.js'
+import { info, warn } from './logger.js'
 
 // 关务前置机四个接口。请求全部经渲染进程发出，便于 DevTools Network 排查。
-// 日志禁止出现完整密钥、XML 或 Base64。
+// 日志纪律（文档 §13）：不记录完整密钥、XML、Base64、请求头/响应体；
+// 例行成功的请求不逐条落日志，业务状态与异常在调用方记录。
 
 export const API_PREFIX = '/admin-api/declaration/agent'
 
@@ -72,8 +73,6 @@ async function post(cfg, apiPath, body, { timeoutMs, scope = 'api', label = apiP
     const msg = (data && typeof data.msg === 'string' ? data.msg : '') || res.statusText || ''
     const ok = httpOk && code === 0
 
-    debug(`${label} HTTP ${res.status} code=${code ?? '-'} ${cost}ms`, scope)
-
     if (!httpOk && (res.status === 401 || res.status === 503)) {
       return {
         ok: false,
@@ -119,7 +118,7 @@ export async function pullTasks(cfg, { tradeModes, batchSize } = {}) {
   const res = await post(cfg, '/tasks/pull', body, { scope: 'pull', label: 'pull' })
   if (!res.ok) return res
   const tasks = Array.isArray(res.data?.tasks) ? res.data.tasks : []
-  info(`拉取任务 ${tasks.length} 条`, 'pull')
+  if (tasks.length) info(`本轮拉取到 ${tasks.length} 条任务`, 'pull')
   return { ...res, tasks }
 }
 

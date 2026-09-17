@@ -4,6 +4,7 @@ import { write as writeAutoStart } from './autostart.js'
 import { loadConfig } from './config.js'
 import { broadcast, registerIpc } from './ipc.js'
 import { closeLogger, error, info, initLogger, log, subscribe } from './logger.js'
+import { closeLedger } from './ledger.js'
 import { start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
 import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
 import { checkForUpdates, onUpdateState, setupUpdater } from './updater.js'
@@ -210,6 +211,7 @@ if (!app.requestSingleInstanceLock()) {
     isQuitting = true
     stopPoller()
     stopLogUpload()
+    closeLedger()
     destroyTray()
     closeLogger()
   })
