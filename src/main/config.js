@@ -8,9 +8,10 @@ import { app } from 'electron'
 import { CAN_EDIT_SERVER } from './env.js'
 import { BUSINESS_TYPES, emptyBizDir } from '../shared/biz-types.js'
 
-// 测试环境兜底地址；生产地址待定，联调/测试包未填时走这里。
-// 生产包若仍为空，请求会失败并提示配置服务器地址。
-export const DEFAULT_API_URL = 'https://www.tel365.com:8088'
+// 生产包地址写死在程序里，界面不可改；测试/开发未填地址时走测试兜底。
+export const PROD_API_URL = 'https://www.astongai.com'
+export const TEST_API_URL = 'https://www.tel365.com:8088'
+export const DEFAULT_API_URL = TEST_API_URL
 
 // 字段名以后台接口契约为准：只保存企业鉴权密钥，不再保存租户 ID。
 const DEFAULTS = {
@@ -162,17 +163,18 @@ function normalize(raw) {
   const profiles = normalizeProfiles(raw)
   const activeProfile = CAN_EDIT_SERVER ? clampInt(raw.activeProfile, 0, profiles.length - 1, 0) : 0
   const active = profiles[activeProfile]
-  // 生产包地址不可改：优先用户曾填的，否则测试兜底（生产待定）
-  const apiUrl = CAN_EDIT_SERVER ? active.apiUrl : stripTrailingSlash(raw.apiUrl) || DEFAULT_API_URL
+  const agentKey = str(active.agentKey || raw.agentKey || raw.appKey)
+  // 生产包地址写死，不信任界面/历史配置；测试包留空时用测试地址
+  const apiUrl = CAN_EDIT_SERVER ? active.apiUrl : PROD_API_URL
   return {
     tag: CAN_EDIT_SERVER ? active.tag : '',
     apiUrl,
-    agentKey: active.agentKey,
+    agentKey,
     instanceName: str(raw.instanceName) || defaultInstanceName(),
     swImportBasePath: str(raw.swImportBasePath),
     profiles: CAN_EDIT_SERVER
       ? profiles
-      : [normalizeProfile({ tag: '', apiUrl: DEFAULT_API_URL, agentKey: active.agentKey })],
+      : [normalizeProfile({ tag: '', apiUrl: PROD_API_URL, agentKey })],
     activeProfile,
     bizDirs: normalizeBizDirs(raw),
     maxConcurrentTasks: clampInt(raw.maxConcurrentTasks, 1, 5, DEFAULTS.maxConcurrentTasks),
@@ -255,7 +257,9 @@ export async function saveConfig(patch) {
 }
 
 export function effectiveApiUrl(cfg) {
-  return stripTrailingSlash(cfg?.apiUrl) || DEFAULT_API_URL
+  // 生产包始终打内置生产地址，忽略任何本地残留
+  if (!CAN_EDIT_SERVER) return PROD_API_URL
+  return stripTrailingSlash(cfg?.apiUrl) || TEST_API_URL
 }
 
 export async function checkDir(dir, { label = '目录' } = {}) {

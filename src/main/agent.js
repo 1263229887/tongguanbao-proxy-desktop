@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { app } from 'electron'
-import { loadConfig } from './config.js'
+import { effectiveApiUrl, loadConfig } from './config.js'
 import {
   BIZ_CODE,
   formatDateTime,
@@ -16,8 +16,10 @@ import {
   uploadReceipt
 } from './backend.js'
 import {
-  findTaskByTaskId,
+  deliveredFileStems,
+  deliveredRoundsByClientSeqNo,
   getReceiptRecord,
+  getRoundRecord,
   getTaskRecord,
   initLedger,
   pendingTaskCount,
@@ -27,11 +29,26 @@ import {
 } from './ledger.js'
 import { debug, error, info, warn } from './logger.js'
 
-// 真实代理引擎（文档 v1.3）：拉取 DECCUS001 → 原子写 OutBox → 回报状态 → 轮询 InBox 上传回执 → 心跳。
-// 回执只读不移动：以 SHA-256 为唯一标识，处理状态入 SQLite 账本（ACKED_MATCHED/ACKED_UNMATCHED/RETRY_PENDING/PERMANENT_REJECTED）。
+// 真实代理引擎（文档 v1.4）：拉取 DECCUS001 → 原子写 OutBox → 回报状态 → 轮询 InBox 上传回执 → 心跳。
+// clientSeqNo 为申报轮次标识：同 taskId 新轮次正常投递，账本按 taskId+clientSeqNo+xmlSha256 三段键记录。
+// 回执只读不移动，且只处理属于本代理已投递任务的回执（按文件名主干识别归属）；
+// 以 SHA-256 为唯一标识，处理状态入 SQLite 账本（ACKED_MATCHED/ACKED_UNMATCHED/RETRY_PENDING/PERMANENT_REJECTED）。
+//
+// 平台跨租户模式（跨租户文档 v1.0，自动识别：pull 响应任务带 tenantId 即为平台 Key）：
+// 一个平台 Key 处理所有有效业务租户，四个接口协议不变；差异仅在上传回执必须携带本地关联出的 taskId
+// （文件名主干预筛后，从回执原始字节提取 ClientSeqNo，投递账本恰好命中一条才算关联成功），
+// tenantId 只落账本与日志用于审计排障，不参与目录选择、不进请求体。
 
-const SUPPORTED_MODULE = 'DECCUS001'
-const TRADE_MODES = ['export', 'import', '9610']
+/**
+ * 当前启用的业务模块定义。后期新增模块时新增描述符并各起一套轮询：
+ * 目录取 cfg.bizDirs[对应的组]、pull 按 moduleCode 过滤、账本按 businessModuleCode 隔离，
+ * 各模块的任务队列、回执归属、目录互不混用。
+ */
+const BIZ = {
+  bizType: 'goods', // 参数配置里的业务目录组 id
+  moduleCode: 'DECCUS001', // 后端 businessModuleCode 白名单（货物申报/报关单暂存）
+  tradeModes: ['export', 'import', '9610'] // 本模块允许拉取的任务分类
+}
 
 const state = {
   running: false,
@@ -47,7 +64,8 @@ const state = {
   tickCount: 0,
   clockOffsetMs: 0,
   instanceName: '',
-  module: SUPPORTED_MODULE
+  module: BIZ.moduleCode,
+  platformMode: null // null=尚未识别；true=平台跨租户模式（回执上传带 taskId）；false=普通租户模式
 }
 
 let broadcast = () => {}
@@ -59,6 +77,7 @@ let inboxBusy = false
 let heartbeatBusy = false
 let ledgerReady = false
 let clockOffsetWarned = false
+let heartbeatTenantWarned = false
 
 function patch(values) {
   Object.assign(state, values)
@@ -75,7 +94,7 @@ export function getAgentState() {
 }
 
 function goodsDirs(cfg) {
-  const d = cfg.bizDirs?.goods
+  const d = cfg.bizDirs?.[BIZ.bizType]
   return {
     outBox: d?.outBox || '',
     sentBox: d?.sentBox || '',
@@ -116,6 +135,7 @@ async function deliverTask(cfg, task) {
   const dirs = goodsDirs(cfg)
   const {
     taskId,
+    tenantId,
     orderId,
     tradeMode,
     businessModuleCode,
@@ -127,9 +147,9 @@ async function deliverTask(cfg, task) {
     decXmlBase64
   } = task
 
-  const summary = `taskId=${taskId} order=${orderId} mode=${tradeMode} file=${fileName} sha=${String(xmlSha256).slice(0, 12)}…`
+  const summary = `taskId=${taskId}${tenantId != null ? ` tenant=${tenantId}` : ''} order=${orderId} mode=${tradeMode} file=${fileName} sha=${String(xmlSha256).slice(0, 12)}…`
 
-  if (businessModuleCode && businessModuleCode !== SUPPORTED_MODULE) {
+  if (businessModuleCode && businessModuleCode !== BIZ.moduleCode) {
     warn(`不支持的业务模块 ${businessModuleCode}，停止投递并告警。${summary}`, 'deliver')
     return { ok: false, reason: `不支持的业务模块 ${businessModuleCode}` }
   }
@@ -173,10 +193,12 @@ async function deliverTask(cfg, task) {
     return { ok: false, reason: 'SHA-256 不一致' }
   }
 
-  const existing = getTaskRecord(taskId, xmlSha256)
-  const sameTaskOtherHash = findTaskByTaskId(taskId)
-  if (sameTaskOtherHash && sameTaskOtherHash.xmlSha256 !== xmlSha256) {
-    const msg = `账本中同一 taskId 存在不同 xmlSha256，需人工处理。${summary}`
+  // v1.4：clientSeqNo 是申报轮次唯一标识。同 taskId 出现新 clientSeqNo + xmlSha256 = 失败重报的新轮次，
+  // 必须新增账本记录并正常投递；只有同一 clientSeqNo 对应不同 xmlSha256 才属协议异常
+  const existing = getTaskRecord(taskId, clientSeqNo, xmlSha256)
+  const priorRound = getRoundRecord(taskId, clientSeqNo)
+  if (priorRound && priorRound.xmlSha256 !== xmlSha256) {
+    const msg = `同一 clientSeqNo=${clientSeqNo} 对应不同 xmlSha256，属协议异常，停止处理。${summary}`
     error(msg, 'deliver')
     patch({ lastError: msg })
     return { ok: false, reason: msg, needManual: true }
@@ -190,7 +212,7 @@ async function deliverTask(cfg, task) {
       message: '本地账本已记录投递，直接回报'
     })
     if (rep.ok) {
-      await upsertTask({ taskId, xmlSha256, reportOk: true })
+      await upsertTask({ taskId, clientSeqNo, xmlSha256, reportOk: true })
       info(`状态回报成功（账本去重回补）taskId=${taskId}`, 'deliver')
       patch({ processed: state.processed + 1 })
     }
@@ -216,12 +238,14 @@ async function deliverTask(cfg, task) {
           taskId,
           xmlSha256,
           clientSeqNo,
+          tenantId: tenantId ?? null,
+          tradeMode: tradeMode ?? null,
           fileName,
           tempName: tempNameFor(fileName, taskId),
           outBox: dirs.outBox,
           status: 'DELIVERED',
           dispatchToken,
-          businessModuleCode: businessModuleCode || SUPPORTED_MODULE,
+          businessModuleCode: businessModuleCode || BIZ.moduleCode,
           leaseExpireAt,
           firstAt: existing?.firstAt || Date.now()
         })
@@ -231,7 +255,7 @@ async function deliverTask(cfg, task) {
           message: '正式文件已在 OutBox，账本补记 DELIVERED'
         })
         if (rep.ok) {
-          await upsertTask({ taskId, xmlSha256, reportOk: true })
+          await upsertTask({ taskId, clientSeqNo, xmlSha256, reportOk: true })
           info(`状态回报成功（正式文件已存在补记）taskId=${taskId}`, 'deliver')
           patch({ processed: state.processed + 1, delivered: state.delivered + 1 })
         }
@@ -262,12 +286,14 @@ async function deliverTask(cfg, task) {
       taskId,
       xmlSha256,
       clientSeqNo,
+      tenantId: tenantId ?? null,
+      tradeMode: tradeMode ?? null,
       fileName,
       tempName: tempNameFor(fileName, taskId),
       outBox: dirs.outBox,
       status: 'PREPARED',
       dispatchToken,
-      businessModuleCode: businessModuleCode || SUPPORTED_MODULE,
+      businessModuleCode: businessModuleCode || BIZ.moduleCode,
       leaseExpireAt,
       firstAt: existing?.firstAt || Date.now()
     })
@@ -276,6 +302,7 @@ async function deliverTask(cfg, task) {
 
     await upsertTask({
       taskId,
+      clientSeqNo,
       xmlSha256,
       status: 'DELIVERED',
       dispatchToken
@@ -293,7 +320,7 @@ async function deliverTask(cfg, task) {
       patch({ lastError: `任务 ${taskId} 已投递但回报失败：${rep.msg}` })
       return { ok: false, deliveredButReportFailed: true, reason: rep.msg }
     }
-    await upsertTask({ taskId, xmlSha256, reportOk: true })
+    await upsertTask({ taskId, clientSeqNo, xmlSha256, reportOk: true })
     info(`状态回报成功 OUTBOX_DROPPED taskId=${taskId}`, 'deliver')
     patch({ processed: state.processed + 1, delivered: state.delivered + 1, lastError: null })
     return { ok: true }
@@ -301,6 +328,22 @@ async function deliverTask(cfg, task) {
     error(`投递异常：${e.message}。${summary}`, 'deliver')
     patch({ lastError: e.message })
     return { ok: false, reason: e.message }
+  }
+}
+
+/**
+ * 平台跨租户模式自动识别（跨租户文档 §2）：平台 Key 的 pull 响应额外返回任务真实 tenantId。
+ * 首次识别后整个会话内保持：一旦升级为平台模式不再降级，避免后端偶发缺字段导致回执漏带 taskId。
+ */
+function detectPlatformMode(tasks) {
+  if (!tasks.length) return
+  const hasTenant = tasks.some((t) => t?.tenantId != null)
+  if (hasTenant && state.platformMode !== true) {
+    patch({ platformMode: true })
+    info('pull 响应包含 tenantId，按平台跨租户模式运行：回执上传将携带本地关联的 taskId', 'pull')
+  } else if (!hasTenant && state.platformMode == null) {
+    patch({ platformMode: false })
+    info('pull 响应不含 tenantId，按普通租户模式运行', 'pull')
   }
 }
 
@@ -319,10 +362,16 @@ async function reconcileReports(cfg) {
       message: '补报：文件已投递，此前回报未获确认'
     })
     if (rep.ok) {
-      await upsertTask({ taskId: rec.taskId, xmlSha256: rec.xmlSha256, reportOk: true })
+      await upsertTask({ taskId: rec.taskId, clientSeqNo: rec.clientSeqNo, xmlSha256: rec.xmlSha256, reportOk: true })
       info(`补报成功 taskId=${rec.taskId}`, 'deliver')
     } else if (rep.code === BIZ_CODE.TASK_NOT_FOUND || rep.code === BIZ_CODE.STATUS_CONFLICT) {
-      await upsertTask({ taskId: rec.taskId, xmlSha256: rec.xmlSha256, reportOk: true, reportConflictCode: rep.code })
+      await upsertTask({
+        taskId: rec.taskId,
+        clientSeqNo: rec.clientSeqNo,
+        xmlSha256: rec.xmlSha256,
+        reportOk: true,
+        reportConflictCode: rep.code
+      })
       warn(`补报被拒绝 taskId=${rec.taskId} code=${rep.code} ${rep.msg}，已停止重复回报，需双方核查`, 'deliver')
       patch({ lastError: `任务 ${rec.taskId} 状态回报冲突（code=${rep.code}），需双方核查` })
     } else {
@@ -352,7 +401,7 @@ async function tickTasks() {
     }
 
     const res = await pullTasks(cfg, {
-      tradeModes: TRADE_MODES,
+      tradeModes: BIZ.tradeModes,
       batchSize: cfg.batchSize
     })
 
@@ -374,10 +423,12 @@ async function tickTasks() {
 
     patch({ connected: true, authFailed: false, channelClosed: false, lastError: null, tickCount: state.tickCount + 1 })
 
+    detectPlatformMode(res.tasks || [])
+
     for (const task of res.tasks || []) {
       if (!state.enabled) break
       info(
-        `领取任务入队 taskId=${task.taskId} sha=${String(task.xmlSha256 || '').slice(0, 12)} file=${task.fileName}`,
+        `领取任务入队 taskId=${task.taskId}${task.tenantId != null ? ` tenant=${task.tenantId}` : ''} sha=${String(task.xmlSha256 || '').slice(0, 12)} file=${task.fileName}`,
         'pull'
       )
       await deliverTask(cfg, task)
@@ -445,10 +496,29 @@ function backoffMs(retryCount) {
 }
 
 /**
+ * 从回执原始字节提取 ClientSeqNo（跨租户文档 §7.3，仅用于本地任务关联）。
+ * 不引入 XML 解析器：在原始字节上按 ASCII 兼容编码（UTF-8/GBK）做正则匹配，
+ * 不解析实体/DTD/命名空间，天然满足"禁用 DTD、外部实体和 XInclude"的 XXE 防护要求；
+ * 允许带命名空间前缀；上传时仍使用最初读取的原始字节，本函数结果不回写文件。
+ */
+function extractClientSeqNo(buf) {
+  const m = buf
+    .toString('latin1')
+    .match(/<(?:[A-Za-z_][\w.-]*:)?ClientSeqNo>\s*([0-9A-Za-z_-]+)\s*<\/(?:[A-Za-z_][\w.-]*:)?ClientSeqNo>/)
+  return m ? m[1] : null
+}
+
+/**
  * 回执处理（文档 v1.3 §7.3）：只读 InBox 文件，绝不移动/重命名/删除（§7.3.4）。
  * 以 XML 原始字节 SHA-256 为唯一标识（§7.3.5），结果按 §7.3 响应矩阵写入 SQLite 账本：
  * matched=true（duplicate 任意）→ ACKED_MATCHED；matched=false → ACKED_UNMATCHED；
  * 1050000204/205 或本地大小预检不过 → PERMANENT_REJECTED；网络/临时错误 → RETRY_PENDING 指数退避。
+ *
+ * 平台跨租户模式（跨租户文档 §7/§8）：上传前必须本地关联 taskId——
+ * 提取 XML 内 ClientSeqNo → 查投递账本恰好命中一条 DELIVERED 轮次；
+ * 未命中/多候选（不同租户可能同流水号）→ LOCAL_UNMATCHED，停止自动上传并告警等人工核查；
+ * 已携带 taskId 仍返回 1050000209（与 ClientSeqNo 不匹配）→ PERMANENT_REJECTED，停止重试当前组合；
+ * 未携带 taskId 时返回 1050000209（模式尚未识别的启动窗口）→ 按 RETRY_PENDING 重试，识别后再关联。
  */
 async function processInboxFile(cfg, file) {
   const sha = await fileSha(file)
@@ -469,6 +539,7 @@ async function processInboxFile(cfg, file) {
     fileName: file.name,
     size: file.size,
     mtime: file.mtime,
+    bizModule: BIZ.moduleCode,
     lastAttemptAt: Date.now(),
     firstSeenAt: rec?.firstSeenAt ?? Date.now(),
     retryCount: rec?.retryCount ?? 0
@@ -484,9 +555,40 @@ async function processInboxFile(cfg, file) {
     return
   }
 
+  // 平台跨租户模式：先本地关联 taskId（跨租户文档 §7），未命中/多候选停止自动上传并告警
+  let platformTask = null
+  if (state.platformMode) {
+    const seqNo = extractClientSeqNo(buf)
+    if (!seqNo) {
+      warn(`无法从回执提取 ClientSeqNo，记为永久拒绝，文件保留在 InBox：${file.name}`, 'receipt')
+      await upsertReceipt({ ...common, state: 'PERMANENT_REJECTED', message: '无法从回执 XML 提取 ClientSeqNo' })
+      settled.set(file.full, { size: file.size, mtime: file.mtime })
+      patch({ lastError: `回执 ${file.name} 无法提取 ClientSeqNo，待人工核查` })
+      return
+    }
+    const rounds = deliveredRoundsByClientSeqNo(seqNo)
+    if (rounds.length !== 1) {
+      const why = rounds.length
+        ? `ClientSeqNo=${seqNo} 在本地账本命中 ${rounds.length} 条任务（跨租户流水号重复），无法确定归属`
+        : `ClientSeqNo=${seqNo} 未命中本地投递账本`
+      warn(`回执无法唯一关联任务，停止自动上传待人工核查：${file.name} ${why}`, 'receipt')
+      await upsertReceipt({ ...common, clientSeqNo: seqNo, state: 'LOCAL_UNMATCHED', message: why })
+      settled.set(file.full, { size: file.size, mtime: file.mtime })
+      patch({ lastError: `回执 ${file.name} 无法唯一关联任务，待人工核查` })
+      return
+    }
+    platformTask = rounds[0]
+    common.clientSeqNo = platformTask.clientSeqNo
+    common.tenantId = platformTask.tenantId ?? null
+  }
+
   const receivedAt = formatDateTime(new Date(file.mtime))
-  info(`上传回执 ${file.name} size=${buf.length} retry=${common.retryCount}`, 'receipt')
+  info(
+    `上传回执 ${file.name} size=${buf.length} retry=${common.retryCount}${platformTask ? ` taskId=${platformTask.taskId}` : ''}`,
+    'receipt'
+  )
   const res = await uploadReceipt(cfg, {
+    ...(platformTask ? { taskId: platformTask.taskId, tradeMode: platformTask.tradeMode } : {}),
     fileName: file.name,
     receivedAt,
     receiptXmlBase64: b64
@@ -500,11 +602,21 @@ async function processInboxFile(cfg, file) {
       patch({ lastError: `回执 ${file.name} 被拒绝：${res.msg}` })
       return
     }
+    if (res.code === BIZ_CODE.RECEIPT_TASK_MISMATCH && platformTask) {
+      // 已携带 taskId 仍不匹配：任务身份冲突，停止重试当前组合并核查本地关联（跨租户文档 §11.2/§12）
+      warn(`回执 taskId=${platformTask.taskId} 与 ClientSeqNo 不匹配（1050000209），记为永久拒绝，请核查本地关联：${file.name} ${res.msg}`, 'receipt')
+      await upsertReceipt({ ...common, state: 'PERMANENT_REJECTED', message: res.msg })
+      settled.set(file.full, { size: file.size, mtime: file.mtime })
+      patch({ lastError: `回执 ${file.name} taskId 与 ClientSeqNo 不匹配，待人工核查` })
+      return
+    }
     if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {
       patch({ authFailed: true, lastError: res.msg })
       return
     }
-    // 网络异常、响应未知或可重试的服务端错误：RETRY_PENDING + 指数退避，文件始终留在 InBox
+    // 网络异常、响应未知或可重试的服务端错误：RETRY_PENDING + 指数退避，文件始终留在 InBox。
+    // 未携带 taskId 时收到 1050000209（首次 pull 未完成、模式未识别的启动窗口）也走重试，
+    // 平台模式识别后会带 taskId 重新关联上传
     const retryCount = common.retryCount + 1
     const delay = backoffMs(retryCount)
     warn(`回执上传失败，约 ${Math.round(delay / 1000)}s 后重试（第 ${retryCount} 次）：${file.name} ${res.msg}`, 'receipt')
@@ -553,9 +665,15 @@ async function tickInbox() {
   inboxBusy = true
   try {
     const files = await scanInboxOnce(dirs.inBox)
+    // 回执归属过滤：单一窗口回执名 = 前缀 + 所投递文件主干 + 流水号。
+    // 只处理文件名能对上某个本代理 DELIVERED 任务主干的回执；
+    // 其他系统/历史文件不读、不传、不入库（PREPARED 未落地的任务不会产生回执，不参与匹配）
+    const stems = deliveredFileStems(BIZ.moduleCode)
     const now = Date.now()
     const ready = []
     for (const f of files) {
+      const noExt = f.name.replace(/\.xml$/i, '')
+      if (!stems.some((s) => noExt.includes(s))) continue
       // 已终态且内容未变的文件直接跳过，不再进入稳定判定和处理
       const done = settled.get(f.full)
       if (done && done.size === f.size && done.mtime === f.mtime) continue
@@ -639,6 +757,16 @@ async function tickHeartbeat() {
         patch({ channelClosed: true, connected: false, lastError: res.msg, lastHeartbeatAt: Date.now() })
         return
       }
+      if (res.code === BIZ_CODE.HEARTBEAT_TENANT_UNSET) {
+        // 1050000208（跨租户文档 §12）：后端未配置平台 heartbeat 归属租户。
+        // 属后端配置问题，不阻断既有心跳节奏（30s+ 本身即低频探测），告警一次并提示联系后端运维
+        if (!heartbeatTenantWarned) {
+          warn(`后端未配置平台心跳归属租户（1050000208），保持低频心跳重试：${res.msg}`, 'heartbeat')
+          heartbeatTenantWarned = true
+        }
+        patch({ lastError: '后端未配置平台心跳归属租户（1050000208），请联系后端运维', lastHeartbeatAt: Date.now() })
+        return
+      }
       patch({ lastError: res.msg, lastHeartbeatAt: Date.now() })
       return
     }
@@ -658,6 +786,7 @@ async function tickHeartbeat() {
         }
       }
     }
+    heartbeatTenantWarned = false
     patch({
       connected: true,
       authFailed: false,
@@ -700,7 +829,7 @@ export async function startAgent() {
   state.enabled = true
   patch({ instanceName: cfg.instanceName, running: true, polling: true, lastError: null })
 
-  const urlHint = cfg.apiUrl || '默认测试地址 https://www.tel365.com:8088'
+  const urlHint = effectiveApiUrl(cfg)
   info(
     `代理已启动 instance=${cfg.instanceName} api=${urlHint} key=${maskKey(cfg.agentKey)} 任务间隔=${cfg.pollIntervalSeconds}s 回执间隔=${cfg.inboxIntervalSeconds}s 心跳间隔=${cfg.heartbeatIntervalSeconds}s`,
     'agent'

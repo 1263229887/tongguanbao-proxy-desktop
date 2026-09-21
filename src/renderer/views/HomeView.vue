@@ -4,7 +4,7 @@ import { gsap } from '../vendor/gsap.min.js'
 import StatusTile from '../components/StatusTile.vue'
 import { config, go, meta, pollState } from '../store.js'
 import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs } from '../../shared/biz-types.js'
-import { bizRun, isRunning, missingDirs, runningCount, startBiz, stopBiz } from '../biz-run.js'
+import { bizRun, isRunning, missingDirs, startBiz, stopBiz } from '../biz-run.js'
 
 // 主进程代理状态与首页「货物申报」卡片对齐
 watch(
@@ -19,10 +19,10 @@ watch(
 )
 
 const GUIDE = [
-  { view: 'access', label: '权限配置', desc: '填写企业鉴权密钥（sk-…）。测试环境服务器地址可留空，将自动使用 https://www.tel365.com:8088。保存后可点「测试访问」确认能否连通。' },
+  { view: 'access', label: '权限配置', desc: '填写企业鉴权密钥（sk-…），可点眼睛图标显示/隐藏。开发/测试包可维护多组服务器地址 + 密钥并互切；生产包地址已内置，只需配密钥。保存后可点「测试访问」确认能否连通。' },
   { view: 'dir', label: '目录配置', desc: '货物申报请配置统一 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入。目录必须与对方完全一致。' },
   { view: 'param', label: '参数配置', desc: '轮询间隔、回执/心跳间隔、开机自动启动、日志保留。本地开发可打开调试控制台查看 Network。' },
-  { view: 'about', label: '保持运行与更新', desc: '关闭主窗口后程序仍在后台；彻底退出请在托盘图标上右键。生产环境可用 Ctrl+Shift+I 打开调试台。' }
+  { view: 'about', label: '关于与后台运行', desc: '在「关于」可查看版本信息。关闭主窗口后程序仍在后台；彻底退出请在托盘图标上右键。生产环境可用 Ctrl+Shift+I 打开调试台。' }
 ]
 
 const now = ref(Date.now())
@@ -53,9 +53,16 @@ const CONNECTED = {
   no: { value: '未联通', tone: 'bad' },
   probe: { value: '尚未探测', tone: 'default' }
 }
+// 平台跨租户模式（pull 响应带 tenantId 自动识别）：连接状态上直接标识
 const connectedState = computed(() => {
   const c = pollState.value.connected
-  return c === null ? CONNECTED.probe : c ? CONNECTED.yes : CONNECTED.no
+  if (c === null) return CONNECTED.probe
+  if (!c) return CONNECTED.no
+  return pollState.value.platformMode ? { value: '已联通 · 平台跨租户', tone: 'good' } : CONNECTED.yes
+})
+const connectedHint = computed(() => {
+  if (connectedState.value.tone === 'bad') return pollState.value.lastError || ''
+  return pollState.value.platformMode ? '平台 Key 单密钥处理多租户任务，回执携带 taskId 上传' : ''
 })
 
 const toast = ref(null)
@@ -173,8 +180,13 @@ function onStop(type) {
   stopBiz(type.id)
 }
 
+// 首页业务启动不展示「默认」；目录配置仍保留
+const HOME_BIZ_TYPES = BUSINESS_TYPES.filter((t) => t.id !== 'default')
+
+const homeRunningCount = computed(() => HOME_BIZ_TYPES.filter((t) => isRunning(t.id)).length)
+
 const bizCards = computed(() =>
-  BUSINESS_TYPES.map((t) => {
+  HOME_BIZ_TYPES.map((t) => {
     const entry = config.value?.bizDirs?.[t.id]
     return {
       ...t,
@@ -182,8 +194,7 @@ const bizCards = computed(() =>
       total: DIR_FIELDS.length,
       tasks: entry?.maxConcurrentTasks ?? '—',
       running: isRunning(t.id),
-      miss: missingDirs(t.id),
-      real: t.id === 'goods'
+      miss: missingDirs(t.id)
     }
   })
 )
@@ -192,12 +203,12 @@ const bizCards = computed(() =>
 <template>
   <div class="h-full overflow-y-auto p-5 flex flex-col gap-3">
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 shrink-0">
-      <StatusTile label="运行中业务" :value="`${runningCount} / ${BUSINESS_TYPES.length}`" :tone="runningCount ? 'good' : 'default'" hint="仅统计本机已启动的业务" />
+      <StatusTile label="运行中业务" :value="`${homeRunningCount} / ${HOME_BIZ_TYPES.length}`" :tone="homeRunningCount ? 'good' : 'default'" hint="仅统计本机已启动的业务" />
       <StatusTile
-        label="与服务器是否已联通"
+        label="与服务器连接状态"
         :value="connectedState.value"
         :tone="connectedState.tone"
-        :hint="connectedState.tone === 'bad' ? pollState.lastError : ''"
+        :hint="connectedHint"
       />
       <StatusTile label="启动后运行时长" :value="uptime" hint="自本次程序启动计时" />
       <StatusTile
@@ -215,24 +226,6 @@ const bizCards = computed(() =>
           <button type="button" class="underline decoration-dotted text-brand-600 hover:text-brand-700" @click="go('dir')">目录配置</button>
           与对方<strong class="font-semibold">完全一致</strong>。未配齐目录和启动回执，启动业务将无法正常生效。
         </p>
-      </div>
-    </div>
-
-    <div class="panel shrink-0 w-full flex flex-col">
-      <div class="h-10 shrink-0 flex items-center px-4 border-b border-slate-100">
-        <span class="text-sm font-semibold">操作指引</span>
-      </div>
-      <div class="px-4 py-3 flex flex-col divide-y divide-slate-100">
-        <div v-for="(item, i) in GUIDE" :key="item.view" class="group flex gap-3 py-3 first:pt-0 last:pb-0 cursor-pointer" @click="go(item.view)">
-          <span class="w-5 h-5 shrink-0 rounded-full bg-brand-50 text-brand-600 text-xs font-medium flex items-center justify-center">{{ i + 1 }}</span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-slate-700 group-hover:text-brand-600 transition-colors">{{ item.label }}</span>
-              <span class="ml-auto text-xs text-slate-400 shrink-0 group-hover:text-brand-600 transition-colors">去配置 ›</span>
-            </div>
-            <p class="mt-1 text-xs leading-relaxed text-slate-500">{{ item.desc }}</p>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -258,7 +251,6 @@ const bizCards = computed(() =>
               <div class="flex items-baseline gap-2 min-w-0">
                 <span class="text-sm font-semibold" :class="type.running ? 'text-slate-900' : 'text-slate-800'">{{ type.title }}</span>
                 <span v-if="type.subtitle !== type.title" class="text-xs text-slate-400">{{ type.subtitle }}</span>
-                <span v-if="type.real" class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">真实对接</span>
               </div>
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
                 <span :class="type.filled === type.total ? 'text-brand-600' : 'text-amber-600'">
@@ -287,6 +279,24 @@ const bizCards = computed(() =>
 
           <div v-if="animating[type.id]" class="absolute inset-0 pointer-events-none flex items-center justify-center rounded-xl">
             <span class="biz-orb" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel shrink-0 w-full flex flex-col">
+      <div class="h-10 shrink-0 flex items-center px-4 border-b border-slate-100">
+        <span class="text-sm font-semibold">操作指引</span>
+      </div>
+      <div class="px-4 py-3 flex flex-col divide-y divide-slate-100">
+        <div v-for="(item, i) in GUIDE" :key="item.view" class="group flex gap-3 py-3 first:pt-0 last:pb-0 cursor-pointer" @click="go(item.view)">
+          <span class="w-5 h-5 shrink-0 rounded-full bg-brand-50 text-brand-600 text-xs font-medium flex items-center justify-center">{{ i + 1 }}</span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-medium text-slate-700 group-hover:text-brand-600 transition-colors">{{ item.label }}</span>
+              <span class="ml-auto text-xs text-slate-400 shrink-0 group-hover:text-brand-600 transition-colors">去配置 ›</span>
+            </div>
+            <p class="mt-1 text-xs leading-relaxed text-slate-500">{{ item.desc }}</p>
           </div>
         </div>
       </div>

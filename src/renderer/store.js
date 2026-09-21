@@ -7,17 +7,6 @@ export const PHASE_TEXT = {
   failed: '失败'
 }
 
-export const UPDATE_TEXT = {
-  idle: '尚未检查',
-  checking: '检查中…',
-  'up-to-date': '已是最新版本',
-  downloading: '正在下载',
-  ready: '新版本已就绪',
-  installing: '正在安装',
-  error: '更新失败',
-  disabled: '开发环境不检查更新'
-}
-
 export const view = ref('home')
 export const meta = ref(null)
 export const config = ref(null)
@@ -33,12 +22,12 @@ export const pollState = ref({
   lastHeartbeatAt: null,
   lastError: null,
   tickCount: 0,
-  instanceName: ''
+  instanceName: '',
+  platformMode: null
 })
 export const logs = ref([])
 export const logFiles = ref([])
 export const logDir = ref('')
-export const update = ref({ status: 'idle', version: null, note: null })
 export const autoStart = ref({ openAtLogin: false, willLaunch: false, managed: false })
 
 export function go(next) {
@@ -79,12 +68,10 @@ export async function initStore() {
   meta.value = await window.intake.getMeta()
   config.value = await window.intake.getConfig()
   pollState.value = await window.intake.getPollState()
-  update.value = await window.intake.getUpdateState()
   autoStart.value = await window.intake.getAutoStart()
   await refreshLogs()
 
   window.intake.onPollState((next) => (pollState.value = next))
-  window.intake.onUpdateState((next) => (update.value = next))
   window.intake.onLogEntry((entry) => {
     logs.value = [...logs.value, entry].slice(-500)
   })

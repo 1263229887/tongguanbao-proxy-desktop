@@ -7,7 +7,6 @@ import { closeLogger, error, info, initLogger, log, subscribe } from './logger.j
 import { closeLedger } from './ledger.js'
 import { start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
 import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
-import { checkForUpdates, onUpdateState, setupUpdater } from './updater.js'
 import { createTray, destroyTray } from './tray.js'
 import { APP_ENV } from './env.js'
 
@@ -159,7 +158,6 @@ async function bootstrap() {
 
   subscribe((entry) => broadcast('log:entry', entry))
   onPollState((state) => broadcast('poll:state', state))
-  onUpdateState((state) => broadcast('update:state', state))
 
   registerIpc({
     onConfigSaved: async (next) => {
@@ -170,7 +168,6 @@ async function bootstrap() {
     }
   })
 
-  setupUpdater()
   setupJumpList()
   createWindow()
   createTray({ showWindow: showMainWindow, quit: quitApp })
@@ -181,7 +178,6 @@ async function bootstrap() {
   if (app.isPackaged) writeAutoStart(cfg.autoLaunch)
   // 代理默认不自启，需用户在首页点「启动」
   await startLogUpload()
-  if (app.isPackaged) setTimeout(() => checkForUpdates(), 8_000)
 }
 
 if (!app.requestSingleInstanceLock()) {

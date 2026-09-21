@@ -9,7 +9,7 @@ import { checkDir, loadConfig, saveConfig } from './config.js'
 import { run as runLogUpload } from './log-upload.js'
 import { clearLogs, getLogDir, getLogs, listLogFiles, readLogFile } from './logger.js'
 import { getState, runNow, start as startPoller, stop as stopPoller } from './poller.js'
-import { checkForUpdates, getUpdateState, quitAndInstall } from './updater.js'
+import { getUpdateState } from './updater.js'
 import { importSwBizDirs } from './sw-import.js'
 import { info, warn } from './logger.js'
 
@@ -86,22 +86,27 @@ export function registerIpc({ onConfigSaved } = {}) {
     return true
   })
 
-  ipcMain.handle('app:meta', () => ({
-    startedAt: STARTED_AT,
-    name: app.name,
-    env: APP_ENV,
-    version: app.getVersion(),
-    electron: process.versions.electron,
-    chrome: process.versions.chrome,
-    node: process.versions.node,
-    packaged: app.isPackaged,
-    platform: process.platform,
-    arch: process.arch
-  }))
+  ipcMain.handle('app:meta', () => {
+    const v = process.versions || {}
+    // 打包后 process.versions 偶发缺字段，统一转字符串，避免渲染层显示空白
+    return {
+      startedAt: STARTED_AT,
+      name: String(app.name || ''),
+      env: APP_ENV,
+      version: String(app.getVersion?.() ?? ''),
+      electron: String(v.electron ?? ''),
+      chrome: String(v.chrome ?? ''),
+      node: String(v.node ?? ''),
+      packaged: !!app.isPackaged,
+      platform: String(process.platform || ''),
+      arch: String(process.arch || '')
+    }
+  })
 
-  ipcMain.handle('update:check', () => checkForUpdates({ silent: false }))
+  // 在线更新暂未接入，且不再对接 GitHub；保留空实现避免渲染层调用报错
+  ipcMain.handle('update:check', () => ({ ok: false, reason: '在线更新暂未接入' }))
   ipcMain.handle('update:state', () => getUpdateState())
-  ipcMain.handle('update:install', () => quitAndInstall())
+  ipcMain.handle('update:install', () => ({ ok: false, reason: '在线更新暂未接入' }))
 }
 
 export { broadcast }

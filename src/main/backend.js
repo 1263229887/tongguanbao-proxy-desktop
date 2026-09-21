@@ -16,7 +16,10 @@ export const BIZ_CODE = {
   TASK_NOT_FOUND: 1050000202,
   STATUS_CONFLICT: 1050000203,
   RECEIPT_INVALID: 1050000204,
-  RECEIPT_TOO_LARGE: 1050000205
+  RECEIPT_TOO_LARGE: 1050000205,
+  // 以下两个仅平台跨租户模式会出现（跨租户文档 §12）
+  HEARTBEAT_TENANT_UNSET: 1050000208, // 后端未配置平台 heartbeat 归属租户
+  RECEIPT_TASK_MISMATCH: 1050000209 // 回执 taskId 与 ClientSeqNo 不匹配
 }
 
 export function maskKey(key) {
@@ -103,8 +106,17 @@ export function formatDateTime(d = new Date()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
+function epochToMs(n) {
+  // 大于 1e12 视为毫秒（该阈值对应 2001-09，秒级时间戳永远小于它）
+  return n > 1e12 ? n : n * 1000
+}
+
+/** 兼容两种口径：文档约定的 "yyyy-MM-dd HH:mm:ss" 字符串，以及后端可能下发的 epoch 秒/毫秒（含 "1789…0.0" 数字串）；解析失败返回 null */
 export function parseDateTime(text) {
-  const m = String(text || '').match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
+  if (typeof text === 'number' && Number.isFinite(text)) return epochToMs(text)
+  const s = String(text ?? '').trim()
+  if (/^\d+(\.\d+)?$/.test(s)) return epochToMs(Number(s))
+  const m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
   if (!m) return null
   return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime()
 }
@@ -136,13 +148,16 @@ export async function reportTaskStatus(cfg, taskId, { dispatchToken, status, mes
   return res
 }
 
-export async function uploadReceipt(cfg, { fileName, receivedAt, receiptXmlBase64, tradeMode }) {
+export async function uploadReceipt(cfg, { taskId, fileName, receivedAt, receiptXmlBase64, tradeMode }) {
   const body = {
     instanceName: cfg.instanceName,
     fileName,
     receivedAt,
     receiptXmlBase64
   }
+  // 平台跨租户模式必带 taskId（跨租户文档 §8.1）；普通租户模式按 v1.4 不带，由后端按 ClientSeqNo 匹配。
+  // 请求体不带 tenantId：租户归属由后端从任务读取。
+  if (taskId != null) body.taskId = taskId
   if (tradeMode) body.tradeMode = tradeMode
   // 回执可能较大，放宽超时
   return post(cfg, '/receipts', body, { scope: 'receipt', label: `receipt:${fileName}`, timeoutMs: 60_000 })

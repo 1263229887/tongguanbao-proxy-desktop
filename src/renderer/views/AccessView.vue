@@ -10,6 +10,9 @@ const TAG_OPTIONS = [
 
 const TAG_TEXT = { test: '测试', prod: '生产', '': '未标' }
 
+// 本地/测试包可维护多组（默认预置两组，可继续新增）
+const MAX_GROUPS = 8
+
 const form = ref(null)
 const groups = ref([])
 const active = ref(0)
@@ -18,7 +21,7 @@ const saved = ref(false)
 const testing = ref(false)
 const result = ref(null)
 
-// 生产包只留企业鉴权密钥；开发/测试可填地址、多组
+// 生产包只留企业鉴权密钥；开发/测试可填地址、双组互切
 const canEditServer = computed(() => meta.value?.env !== 'prod')
 
 function emptyGroup() {
@@ -56,13 +59,32 @@ const groupChips = computed(() =>
   }))
 )
 
+/** 把当前表单写回 groups，切组/保存时不丢未保存内容 */
+function flushFormToGroups() {
+  if (!form.value || active.value < 0 || active.value >= groups.value.length) return
+  const next = [...groups.value]
+  next[active.value] = pickProfile(form.value)
+  groups.value = next
+}
+
 watch(
   config,
   (val) => {
     if (!val) return
+    // 已有本地编辑状态时，不因外部 config 刷新把焦点/表单冲掉
     if (groups.value.length) return
-    const list = val.profiles?.length ? val.profiles : [pickProfile(val)]
-    groups.value = list.map((p) => pickProfile(p))
+    if (!canEditServer.value) {
+      groups.value = [pickProfile(val)]
+      active.value = 0
+      form.value = pickProfile(groups.value[0])
+      return
+    }
+    const list = Array.isArray(val.profiles) && val.profiles.length ? val.profiles.map((p) => pickProfile(p)) : [pickProfile(val)]
+    // 空配置时预置两组方便直接填测试/生产；已有配置不裁剪、不强制补满
+    if (list.length === 1 && !list[0].apiUrl && !list[0].agentKey && !list[0].tag) {
+      list.push(emptyGroup())
+    }
+    groups.value = list.slice(0, MAX_GROUPS)
     active.value = Math.min(val.activeProfile ?? 0, groups.value.length - 1)
     form.value = pickProfile(groups.value[active.value])
   },
@@ -70,27 +92,35 @@ watch(
 )
 
 function selectGroup(i) {
+  if (i === active.value || i < 0 || i >= groups.value.length) return
+  flushFormToGroups()
   active.value = i
   form.value = pickProfile(groups.value[i])
   saved.value = false
   result.value = null
 }
 
-function pickFromList(value) {
-  const i = groups.value.findIndex((g) => g.apiUrl === value || g.agentKey === value)
-  if (i >= 0 && i !== active.value) selectGroup(i)
-}
-
 function addGroup() {
-  groups.value = [...groups.value, emptyGroup()]
-  selectGroup(groups.value.length - 1)
+  if (groups.value.length >= MAX_GROUPS) return
+  flushFormToGroups()
+  const next = [...groups.value, emptyGroup()]
+  groups.value = next
+  // 直接切到新组，避免 selectGroup 因 active 未更新而早退
+  active.value = next.length - 1
+  form.value = pickProfile(next[next.length - 1])
+  saved.value = false
+  result.value = null
 }
 
 function removeGroup() {
   if (groups.value.length <= 1) return
   const rest = groups.value.filter((_, i) => i !== active.value)
   groups.value = rest
-  selectGroup(Math.max(0, active.value - 1))
+  const next = Math.max(0, active.value - 1)
+  active.value = next
+  form.value = pickProfile(groups.value[next])
+  saved.value = false
+  result.value = null
 }
 
 const edited = () => {
@@ -103,9 +133,11 @@ async function submit() {
   saved.value = false
   try {
     if (canEditServer.value) {
-      const next = groups.value.map((g, i) => (i === active.value ? pickProfile(form.value) : pickProfile(g)))
+      flushFormToGroups()
+      const next = groups.value.map((g) => pickProfile(g))
       await saveConfig({ profiles: next, activeProfile: active.value })
       groups.value = next
+      form.value = pickProfile(groups.value[active.value])
     } else {
       await saveConfig({ agentKey: form.value.agentKey })
     }
@@ -154,7 +186,8 @@ async function test() {
             <span class="mr-1.5 opacity-80">{{ chip.tag }}</span>
             <span>{{ chip.label }}</span>
           </button>
-          <span v-if="groups.length === 1" class="text-xs text-slate-400">仅一组，可点「新增一组」</span>
+          <span v-if="groups.length === 1" class="text-xs text-slate-400">可点「新增一组」继续添加</span>
+          <span v-else-if="groups.length >= MAX_GROUPS" class="text-xs text-slate-400">已达到上限 {{ MAX_GROUPS }} 组</span>
         </div>
 
         <div class="rounded-lg border border-brand-200 bg-brand-50/40 p-4 flex flex-col gap-4">
@@ -175,62 +208,72 @@ async function test() {
             <div class="flex-1 min-w-0 grid grid-cols-2 gap-3">
               <div>
                 <div class="label-text mb-1">服务器地址</div>
-                <input
+                <el-input
                   v-model="form.apiUrl"
-                  class="field"
-                  list="api-url-options"
-                  placeholder="留空则用测试环境 https://www.tel365.com:8088"
-                  @change="pickFromList(form.apiUrl)"
+                  placeholder="留空则用测试 https://www.tel365.com:8088"
                   @input="edited"
                 />
-                <datalist id="api-url-options">
-                  <option v-for="(g, i) in groups" :key="i" :value="g.apiUrl" />
-                </datalist>
               </div>
 
               <div>
                 <div class="label-text mb-1">企业鉴权密钥</div>
-                <input
+                <el-input
                   v-model="form.agentKey"
                   type="password"
-                  class="field"
-                  list="agent-key-options"
+                  show-password
                   placeholder="后台下发的 sk-… 企业鉴权密钥"
-                  @change="pickFromList(form.agentKey)"
+                  autocomplete="off"
+                  spellcheck="false"
                   @input="edited"
                 />
-                <datalist id="agent-key-options">
-                  <option v-for="(g, i) in groups" :key="i" :value="g.agentKey" />
-                </datalist>
               </div>
             </div>
           </div>
 
-          <div class="text-xs text-slate-400">密钥会写入本机配置目录，升级重装一般不会丢失。日志中只会显示末 4 位。</div>
+          <div class="text-xs text-slate-400">
+            开发/测试包可维护多组配置互切（例如测试、生产、联调各一组：地址 + 企业 key）。密钥写入本机配置目录，日志只显示末 4 位。
+          </div>
         </div>
 
         <div class="flex items-center gap-2">
-          <button class="btn-ghost" @click="addGroup">新增一组</button>
+          <button class="btn-ghost" :disabled="groups.length >= MAX_GROUPS" @click="addGroup">新增一组</button>
           <button class="btn-ghost" :disabled="groups.length <= 1" @click="removeGroup">删除本组</button>
         </div>
       </template>
 
       <template v-else>
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold">权限配置</span>
+          <span class="text-[11px] px-1.5 rounded bg-slate-100 text-slate-600">生产包</span>
+        </div>
+
         <div>
           <div class="label-text mb-1">企业鉴权密钥</div>
-          <input v-model="form.agentKey" type="password" class="field max-w-[420px]" placeholder="后台按租户下发的 sk-… 密钥" @input="edited" />
+          <el-input
+            v-model="form.agentKey"
+            type="password"
+            show-password
+            class="max-w-[420px]"
+            placeholder="后台按租户下发的 sk-… 密钥"
+            autocomplete="off"
+            spellcheck="false"
+            @input="edited"
+          />
         </div>
 
         <p class="text-xs text-slate-500 leading-relaxed">
-          企业鉴权密钥由后台按租户下发，是本机访问后台数据的唯一凭证（无需租户 ID）。密钥保存在本机用户配置目录，升级后会保留。请妥善保管，不要外传。
+          生产环境服务器地址已内置在程序中，无需填写。企业鉴权密钥由后台按租户下发，是本机访问后台数据的唯一凭证（无需租户 ID）。密钥保存在本机用户配置目录，升级后会保留。请妥善保管，不要外传。
         </p>
       </template>
 
       <div class="border-t border-slate-100 pt-4">
         <div class="label-text mb-1">实例名（instanceName）</div>
-        <div class="field max-w-[420px] cursor-text select-all bg-slate-50 text-slate-500">
-          {{ config?.instanceName || '（待生成）' }}
-        </div>
+        <el-input
+          class="instance-name-input max-w-[420px]"
+          :model-value="config?.instanceName || ''"
+          placeholder="（待生成）"
+          disabled
+        />
         <div class="mt-1 text-xs text-slate-400">
           由「主机名 + 系统硬件指纹」首次自动生成并已固定，后台据此识别这台前置机；请勿修改，一旦变更请保持新名字不再改动。
         </div>
@@ -254,3 +297,19 @@ async function test() {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 实例名禁用态：不可点选、不可复制，只作只读展示 */
+.instance-name-input :deep(.el-input__wrapper) {
+  background-color: #f8fafc;
+  box-shadow: 0 0 0 1px #e2e8f0 inset;
+  cursor: not-allowed;
+}
+
+.instance-name-input :deep(.el-input__inner) {
+  color: #64748b;
+  cursor: not-allowed;
+  user-select: none;
+  -webkit-user-select: none;
+}
+</style>
