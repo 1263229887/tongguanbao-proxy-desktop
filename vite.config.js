@@ -11,6 +11,14 @@ const rendererPort = 5273
 export default defineConfig({
   base: './',
   plugins: [
+    {
+      // 仅 dev：@vite/client 用 blob: 创建 worker，默认 CSP 的 script-src 'self' 会拦截并报错
+      name: 'dev-csp-allow-blob-worker',
+      apply: 'serve',
+      transformIndexHtml(html) {
+        return html.replace("script-src 'self'", "script-src 'self' blob:")
+      }
+    },
     vue(),
     UnoCSS(),
     // Element Plus 按需引入：只打包用到的组件与样式

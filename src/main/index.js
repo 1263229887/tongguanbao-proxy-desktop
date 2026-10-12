@@ -11,9 +11,34 @@ import { createTray, destroyTray } from './tray.js'
 import { APP_ENV } from './env.js'
 
 const DEV_URL = process.env.ELECTRON_RENDERER_URL
+// dev 下禁用 HTTP 磁盘缓存：vite 预打包依赖带 immutable 缓存头，缓存一旦损坏
+// （net\disk_cache Critical error -8）模块读取会静默失败，页面卡成白屏
+if (DEV_URL) app.commandLine.appendSwitch('disable-http-cache')
+
+const RENDERER_FILE = path.join(import.meta.dirname, '../../dist/renderer/index.html')
+const LOAD_TIMEOUT_MS = 15000
+const LOAD_RETRY_MS = 2000
+
+// 加载失败/超时的兜底页（data: URL，无脚本），主进程按 LOAD_RETRY_MS 自动重载真实页面
+const FALLBACK_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>通关宝 proxy</title>
+<style>
+  body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#f3f5f8;font-family:system-ui,'Microsoft YaHei',sans-serif;color:#475569}
+  .dot{display:inline-block;width:8px;height:8px;margin:0 3px;border-radius:50%;background:#94a3b8;animation:pulse 1.2s infinite}
+  .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+  @keyframes pulse{0%,80%,100%{opacity:.25}40%{opacity:1}}
+</style></head>
+<body><div style="text-align:center">
+  <div style="font-size:15px;margin-bottom:10px">界面正在加载<span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+  <div style="font-size:12px;color:#94a3b8">如长时间停留在此页，请重启程序；仍无法进入请检查本机网络与安全软件设置</div>
+</div></body></html>`
+
 let win = null
 let isQuitting = false
 let hideHintShown = false
+let loadSeq = 0
+let retryTimer = null
+let fallbackShown = false
+let loadFailCount = 0
 
 const DIAG_LEVEL = { warning: 'warn', error: 'error' }
 
@@ -57,6 +82,58 @@ function setupDevToolsShortcut() {
 
 function warnShortcut(e) {
   error(`注册调试台快捷键失败：${e.message}`, 'app')
+}
+
+// 显示兜底页：任何加载失败/超时都不允许白屏
+function showFallbackPage() {
+  loadSeq++ // 使仍在挂起中的真实页面加载失效
+  fallbackShown = true
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(FALLBACK_HTML)}`).catch(() => {})
+  win.show()
+}
+
+function handleLoadFailure(seq, reason) {
+  if (seq !== loadSeq || !win || win.isDestroyed()) return
+  loadFailCount++
+  // 首次与后续每 10 次记一条，避免重试刷屏
+  if (loadFailCount === 1 || loadFailCount % 10 === 0) {
+    error(`渲染页面${reason}（第 ${loadFailCount} 次），已显示兜底页并自动重试`, 'app')
+  }
+  showFallbackPage()
+  retryTimer = setTimeout(loadRenderer, LOAD_RETRY_MS)
+}
+
+async function loadRenderer() {
+  if (!win || win.isDestroyed()) return
+  clearTimeout(retryTimer)
+  const seq = ++loadSeq
+  const wasFallback = fallbackShown
+  fallbackShown = false
+  let settled = false
+  // 看门狗：加载"挂起"不触发 did-fail-load（断网时模块请求卡死即此形态），必须靠超时兜底
+  const watchdog = setTimeout(() => {
+    if (settled) return
+    settled = true
+    handleLoadFailure(seq, '加载超时')
+  }, LOAD_TIMEOUT_MS)
+  try {
+    if (DEV_URL) await win.loadURL(DEV_URL)
+    else await win.loadFile(RENDERER_FILE)
+    if (settled) return
+    settled = true
+    clearTimeout(watchdog)
+    if (seq !== loadSeq) return
+    loadFailCount = 0
+    win.show()
+    if (wasFallback) info('渲染页面已恢复加载', 'app')
+    // 开发/测试包默认打开调试台，方便直接看 Network
+    if (!app.isPackaged || APP_ENV !== 'prod') win.webContents.openDevTools({ mode: 'detach' })
+  } catch (e) {
+    if (settled) return
+    settled = true
+    clearTimeout(watchdog)
+    handleLoadFailure(seq, `加载失败：${e.message}`)
+  }
 }
 
 function showMainWindow() {
@@ -117,15 +194,9 @@ function createWindow() {
     }
   })
 
-  // 开发/测试包默认打开调试台，方便直接看 Network
-  if (!app.isPackaged || APP_ENV !== 'prod') {
-    win.webContents.once('did-finish-load', () => {
-      win?.webContents.openDevTools({ mode: 'detach' })
-    })
-  }
-
-  if (DEV_URL) win.loadURL(DEV_URL)
-  else win.loadFile(path.join(import.meta.dirname, '../../dist/renderer/index.html'))
+  // 真实页面加载成功后 loadRenderer 内部会按需打开调试台；
+  // 失败/超时由兜底页 + 自动重试接管，任何情况下不白屏
+  loadRenderer()
 }
 
 // Windows 任务栏右键菜单里的「退出」通过再拉起一个带参数的实例实现，
