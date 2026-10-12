@@ -34,7 +34,5 @@
     "vue": "^3.5.42"
   },
   "description": "Windows 前置机代理：企业鉴权后拉取报关单暂存任务，原子写入单一窗口 OutBox 并上传 InBox 回执",
-  "author": {
-    "name": "TODO-公司名"
-  }
+  "author": "通关宝"
 }

@@ -48,21 +48,17 @@ function formatUptime(ms) {
 
 const uptime = computed(() => formatUptime(now.value - (meta.value?.startedAt ?? now.value)))
 
-const CONNECTED = {
-  yes: { value: '已联通', tone: 'good' },
-  no: { value: '未联通', tone: 'bad' },
-  probe: { value: '尚未探测', tone: 'default' }
-}
-// 平台跨租户模式（pull 响应带 tenantId 自动识别）：连接状态上直接标识
+// 连接状态只报是否连通；成功/探测中用中性文案，不暴露平台 Key、租户等业务细节
 const connectedState = computed(() => {
   const c = pollState.value.connected
-  if (c === null) return CONNECTED.probe
-  if (!c) return CONNECTED.no
-  return pollState.value.platformMode ? { value: '已联通 · 平台跨租户', tone: 'good' } : CONNECTED.yes
+  if (c === null) return { value: '尚未探测', tone: 'default' }
+  if (!c) return { value: '未连通', tone: 'bad' }
+  return { value: '已连通', tone: 'good' }
 })
 const connectedHint = computed(() => {
   if (connectedState.value.tone === 'bad') return pollState.value.lastError || ''
-  return pollState.value.platformMode ? '平台 Key 单密钥处理多租户任务，回执携带 taskId 上传' : ''
+  if (connectedState.value.tone === 'good') return '正常可用'
+  return '等待首次心跳'
 })
 
 const toast = ref(null)

@@ -9,9 +9,6 @@ function val(x) {
 const rows = computed(() => [
   { k: '应用名称', v: val(meta.value?.name) },
   { k: '版本号', v: val(meta.value?.version) },
-  { k: 'Electron', v: val(meta.value?.electron) },
-  { k: 'Chromium', v: val(meta.value?.chrome) },
-  { k: 'Node.js', v: val(meta.value?.node) },
   { k: '运行平台', v: meta.value ? `${val(meta.value.platform)} / ${val(meta.value.arch)}` : '—' },
   { k: '安装形态', v: meta.value ? (meta.value.packaged ? '已打包安装' : '开发模式') : '—' }
 ])

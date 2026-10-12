@@ -44,6 +44,8 @@ nsis:
   allowToChangeInstallationDirectory: true
   differentialPackage: true
   artifactName: ${name}-Setup-${version}.${ext}
+  # 控制面板「卸载程序」里显示的名字，避免拼上 package.json 的 author 占位
+  uninstallDisplayName: ${productName}
 
 # 自动更新走公开仓库的 Releases；私有仓库需要在客户端内置 PAT，不要那样做。
 publish:
