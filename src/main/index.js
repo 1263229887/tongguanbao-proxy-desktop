@@ -9,6 +9,7 @@ import { start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
 import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
 import { createTray, destroyTray } from './tray.js'
 import { APP_ENV } from './env.js'
+import { onUpdateState, setupUpdater, stopUpdater } from './updater.js'
 
 const DEV_URL = process.env.ELECTRON_RENDERER_URL
 // dev 下禁用 HTTP 磁盘缓存：vite 预打包依赖带 immutable 缓存头，缓存一旦损坏
@@ -229,6 +230,7 @@ async function bootstrap() {
 
   subscribe((entry) => broadcast('log:entry', entry))
   onPollState((state) => broadcast('poll:state', state))
+  onUpdateState((state) => broadcast('update:state', state))
 
   registerIpc({
     onConfigSaved: async (next) => {
@@ -243,6 +245,7 @@ async function bootstrap() {
   createWindow()
   createTray({ showWindow: showMainWindow, quit: quitApp })
   setupDevToolsShortcut()
+  setupUpdater()
 
   info(`${app.name} ${app.getVersion()} 启动，env=${APP_ENV}，日志目录 ${logDir}`, 'app')
   info(`企业鉴权密钥已本地缓存于 userData/config.json（升级重装不丢）`, 'app')
@@ -278,6 +281,7 @@ if (!app.requestSingleInstanceLock()) {
     isQuitting = true
     stopPoller()
     stopLogUpload()
+    stopUpdater()
     closeLedger()
     destroyTray()
     closeLogger()

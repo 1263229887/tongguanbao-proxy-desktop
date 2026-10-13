@@ -29,6 +29,15 @@ export const logs = ref([])
 export const logFiles = ref([])
 export const logDir = ref('')
 export const autoStart = ref({ openAtLogin: false, willLaunch: false, managed: false })
+export const updateState = ref({
+  status: 'idle',
+  version: null,
+  size: null,
+  percent: 0,
+  note: null,
+  error: null,
+  checkedAt: null
+})
 
 export function go(next) {
   view.value = next
@@ -69,9 +78,11 @@ export async function initStore() {
   config.value = await window.intake.getConfig()
   pollState.value = await window.intake.getPollState()
   autoStart.value = await window.intake.getAutoStart()
+  updateState.value = await window.intake.getUpdateState()
   await refreshLogs()
 
   window.intake.onPollState((next) => (pollState.value = next))
+  window.intake.onUpdateState((next) => (updateState.value = next))
   window.intake.onLogEntry((entry) => {
     logs.value = [...logs.value, entry].slice(-500)
   })

@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from '../vendor/gsap.min.js'
 import StatusTile from '../components/StatusTile.vue'
-import { config, go, meta, pollState } from '../store.js'
+import { config, go, meta, pollState, updateState } from '../store.js'
 import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs } from '../../shared/biz-types.js'
 import { bizRun, isRunning, missingDirs, startBiz, stopBiz } from '../biz-run.js'
 
@@ -47,6 +47,18 @@ function formatUptime(ms) {
 }
 
 const uptime = computed(() => formatUptime(now.value - (meta.value?.startedAt ?? now.value)))
+
+// 有新版本时首页顶部常驻横幅：提示但绝不自动下载/安装，用户点「前往更新」去关于页操作
+const updateTip = computed(() => {
+  const s = updateState.value
+  if (s.status === 'updateAvailable') {
+    return `发现新版本 v${s.version ?? '—'}，可前往「关于」页下载安装；不会自动下载，也不影响当前业务任务`
+  }
+  if (s.status === 'downloaded') {
+    return `新版本 v${s.version ?? '—'} 已下载完成，可前往「关于」页重启安装`
+  }
+  return null
+})
 
 // 连接状态只报是否连通；成功/探测中用中性文案，不暴露平台 Key、租户等业务细节
 const connectedState = computed(() => {
@@ -198,6 +210,14 @@ const bizCards = computed(() =>
 
 <template>
   <div class="h-full overflow-y-auto p-5 flex flex-col gap-3">
+    <div v-if="updateTip" class="panel px-4 py-3 border-brand-200 bg-brand-50/70 shrink-0 flex items-center gap-3">
+      <span class="shrink-0 w-5 h-5 rounded-full bg-brand-500 text-white text-[11px] font-bold flex items-center justify-center">↑</span>
+      <p class="text-xs leading-relaxed text-brand-700 flex-1">{{ updateTip }}</p>
+      <button type="button" class="shrink-0 text-xs font-medium text-brand-600 hover:text-brand-700 underline decoration-dotted" @click="go('about')">
+        前往更新
+      </button>
+    </div>
+
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 shrink-0">
       <StatusTile label="运行中业务" :value="`${homeRunningCount} / ${HOME_BIZ_TYPES.length}`" :tone="homeRunningCount ? 'good' : 'default'" hint="仅统计本机已启动的业务" />
       <StatusTile

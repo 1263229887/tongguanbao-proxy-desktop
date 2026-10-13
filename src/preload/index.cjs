@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('intake', {
 
   getMeta: () => invoke('app:meta'),
   checkUpdate: () => invoke('update:check'),
+  downloadUpdate: () => invoke('update:download'),
   getUpdateState: () => invoke('update:state'),
   installUpdate: () => invoke('update:install'),
 

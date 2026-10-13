@@ -1,12 +1,12 @@
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
 import logo from './assets/logo.png'
 import HomeView from './views/HomeView.vue'
 import AccessView from './views/AccessView.vue'
 import DirView from './views/DirView.vue'
 import ParamView from './views/ParamView.vue'
 import AboutView from './views/AboutView.vue'
-import { initStore, meta, pollState, view, go } from './store.js'
+import { initStore, meta, pollState, updateState, view, go } from './store.js'
 
 const VIEWS = { home: HomeView, access: AccessView, dir: DirView, param: ParamView, about: AboutView }
 const NAV = [
@@ -23,6 +23,31 @@ const statusTone = {
   bad: 'bg-rose-500',
   idle: 'bg-slate-300'
 }
+
+// 发现新版本 / 下载完成时主动弹提醒（右上角，点击直达关于页）。
+// 只是提示：不自动下载、不自动安装，是否更新完全由用户在关于页决定。
+watch(
+  () => updateState.value.status,
+  (st, old) => {
+    if (st === old) return
+    if (st === 'updateAvailable') {
+      ElNotification({
+        title: '发现新版本',
+        message: `v${updateState.value.version ?? '—'} 已发布，可前往「关于」页下载安装（不会自动下载、不影响业务任务）`,
+        duration: 12000,
+        onClick: () => go('about')
+      })
+    } else if (st === 'downloaded') {
+      ElNotification({
+        title: '新版本已就绪',
+        message: `v${updateState.value.version ?? '—'} 下载完成，可前往「关于」页重启安装`,
+        type: 'success',
+        duration: 12000,
+        onClick: () => go('about')
+      })
+    }
+  }
+)
 
 onMounted(initStore)
 </script>

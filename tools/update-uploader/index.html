@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>更新包上传 · 通关宝前置机</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: #1d1d1f; background: #f5f5f7;
+    font: 14px/1.65 -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 20px 56px; }
+
+  /* ---------- 头部（Apple 风：大标题 + 灰色副标题） ---------- */
+  .hero { display: flex; align-items: center; gap: 18px; margin-bottom: 28px; animation: rise .5s .03s ease both; }
+  .hero .icon {
+    width: 56px; height: 56px; flex: none; border-radius: 15px; display: grid; place-items: center;
+    background: linear-gradient(160deg, #0a84ff, #5e5ce6);
+    box-shadow: 0 10px 24px rgba(10, 132, 255, .30), inset 0 1px 0 rgba(255,255,255,.30);
+  }
+  .hero .icon svg { width: 27px; height: 27px; }
+  h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.4px; }
+  .sub { font-size: 13px; color: #6e6e73; margin-top: 3px; }
+
+  /* ---------- 卡片：白底、大圆角、轻阴影 ---------- */
+  .card {
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, .045);
+    border-radius: 18px; padding: 20px 22px; margin-bottom: 16px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .05);
+    transition: box-shadow .25s ease;
+    animation: rise .5s ease both;
+  }
+  .card:nth-of-type(1) { animation-delay: .08s; } .card:nth-of-type(2) { animation-delay: .14s; }
+  .card:nth-of-type(3) { animation-delay: .2s; } .card:nth-of-type(4) { animation-delay: .26s; }
+  .card:nth-of-type(5) { animation-delay: .32s; }
+  .card:hover { box-shadow: 0 6px 22px rgba(0, 0, 0, .08); }
+  .card h2 { font-size: 15px; font-weight: 650; margin: 0 0 4px; letter-spacing: -.2px; display: flex; align-items: baseline; gap: 8px; }
+  .card h2 small { font-size: 12px; font-weight: 400; color: #86868b; letter-spacing: 0; }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row + .row { margin-top: 10px; }
+  label.lbl { font-size: 13px; color: #6e6e73; width: 64px; flex: none; }
+
+  select, input[type=text], input[type=password] {
+    height: 36px; padding: 0 12px; border: 1px solid #d2d2d7; border-radius: 10px;
+    font-size: 13px; background: #fff; color: #1d1d1f; outline: none;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  select:focus, input:focus { border-color: #0a84ff; box-shadow: 0 0 0 3.5px rgba(10, 132, 255, .16); }
+
+  button {
+    height: 36px; padding: 0 18px; border-radius: 980px; font-size: 13.5px; font-weight: 500; cursor: pointer;
+    border: none; background: #e8e8ed; color: #1d1d1f; letter-spacing: .1px;
+    transition: transform .15s ease, background .15s ease, opacity .15s;
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); background: #dfdfe4; }
+  button:active:not(:disabled) { transform: scale(.98); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: #0071e3; color: #fff; }
+  button.primary:hover:not(:disabled) { background: #0077ed; }
+  button.tint { background: rgba(0, 113, 227, .09); color: #0066cc; }
+  button.tint:hover:not(:disabled) { background: rgba(0, 113, 227, .15); }
+
+  /* ---------- 左右并列 ---------- */
+  .grid2 { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; margin-bottom: 16px; animation: rise .5s .14s ease both; }
+  .grid2 .card { margin-bottom: 0; height: 100%; }
+  @media (max-width: 780px) { .grid2 { grid-template-columns: 1fr; } }
+
+  /* ---------- 拖放区 ---------- */
+  .drop {
+    border: 1.5px dashed #c7c7cc; border-radius: 14px; padding: 28px 16px; text-align: center;
+    color: #86868b; cursor: pointer; transition: border-color .2s, background .2s; background: #fafafa;
+    margin-top: 10px;
+  }
+  .drop b { color: #1d1d1f; font-weight: 600; }
+  .drop:hover { border-color: #0a84ff; }
+  .drop.on { border-color: #0a84ff; border-style: solid; background: rgba(10, 132, 255, .06); color: #0066cc; }
+  .filemeta { font-size: 12px; color: #6e6e73; font-family: ui-monospace, 'SF Mono', Consolas, monospace; word-break: break-all; }
+  code.k { background: #f5f5f7; border-radius: 6px; padding: 1px 6px; font-size: 12px; }
+
+  /* ---------- 进度条 ---------- */
+  .bar { height: 8px; background: #e8e8ed; border-radius: 99px; overflow: hidden; margin-top: 12px; }
+  .bar > i {
+    display: block; height: 100%; width: 0; border-radius: 99px; position: relative; overflow: hidden;
+    background: linear-gradient(90deg, #0a84ff, #64d2ff);
+    transition: width .25s ease;
+  }
+  .bar > i::after {
+    content: ''; position: absolute; inset: 0; opacity: 0;
+    background: repeating-linear-gradient(60deg, rgba(255,255,255,.30) 0 12px, transparent 12px 24px);
+    background-size: 34px 100%;
+  }
+  .bar.live > i::after { opacity: 1; animation: stripes .9s linear infinite; }
+  @keyframes stripes { to { background-position: 34px 0; } }
+  .stat { display: flex; justify-content: space-between; font-size: 12px; color: #86868b; margin-top: 7px; font-family: ui-monospace, 'SF Mono', Consolas, monospace; }
+
+  .phase { font-size: 13.5px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; color: #1d1d1f; }
+  .phase.ok { color: #248a3d; }
+  .phase.bad { color: #d70015; }
+  .spin {
+    width: 15px; height: 15px; flex: none; border-radius: 50%; display: none;
+    border: 2px solid rgba(0,0,0,.10); border-top-color: #0071e3;
+    animation: rot .8s linear infinite;
+  }
+  .phase.busy .spin { display: inline-block; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  .hint { font-size: 12.5px; color: #86868b; margin-top: 8px; }
+  .err { color: #d70015; font-size: 13px; margin-top: 8px; word-break: break-all; animation: shake .3s ease; }
+  @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+
+  details.adv { margin-top: 12px; }
+  details.adv summary { font-size: 12.5px; color: #0066cc; cursor: pointer; user-select: none; }
+  details.adv summary:hover { text-decoration: underline; }
+
+  /* ---------- 已发布表格 ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #f0f0f2; word-break: break-all; }
+  th { color: #86868b; font-weight: 500; }
+  tbody tr { transition: background .15s; }
+  tbody tr:hover { background: #f5f5f7; }
+  tr.latest td { color: #0066cc; font-weight: 600; }
+  td a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+
+  .badge {
+    display: inline-block; font-size: 11.5px; padding: 2px 10px; border-radius: 99px;
+    background: rgba(52, 199, 89, .12); color: #248a3d;
+  }
+  #doneBox .ok-ico { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(52,199,89,.15); color: #248a3d; font-size: 12px; margin-right: 6px; animation: pop .4s cubic-bezier(.2,1.6,.4,1) both; }
+  @keyframes pop { from { transform: scale(0); } to { transform: scale(1); } }
+  .ver { color: #0066cc; font-family: ui-monospace, 'SF Mono', Consolas, monospace; font-weight: 600; }
+
+  /* ---------- 赛博朋克终端（构建日志 / 操作日志） ---------- */
+  .terminal {
+    background: #04070f; border: 1px solid rgba(0, 255, 229, .22); border-radius: 12px;
+    overflow: hidden; position: relative;
+    box-shadow: 0 0 0 1px rgba(0, 255, 229, .05), 0 0 22px rgba(0, 200, 255, .10), inset 0 0 40px rgba(0, 60, 90, .25);
+    animation: rise .5s ease both;
+  }
+  .term-head {
+    display: flex; align-items: center; gap: 7px; padding: 9px 13px;
+    border-bottom: 1px solid rgba(0, 255, 229, .13);
+    background: linear-gradient(180deg, rgba(0, 255, 229, .05), transparent);
+  }
+  .term-head .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .term-head .dot.r { background: #ff5f56; box-shadow: 0 0 6px rgba(255, 95, 86, .8); }
+  .term-head .dot.y { background: #ffbd2e; box-shadow: 0 0 6px rgba(255, 189, 46, .8); }
+  .term-head .dot.g { background: #27c93f; box-shadow: 0 0 6px rgba(39, 201, 63, .8); }
+  .term-head .title {
+    margin-left: 6px; font: 11px ui-monospace, Consolas, monospace; letter-spacing: 1px;
+    color: rgba(0, 255, 229, .55); text-transform: uppercase;
+  }
+  .term-head .title::before { content: '◈ '; color: rgba(0, 255, 229, .8); }
+  .log {
+    height: 148px; overflow-y: auto; color: #9ff5e0;
+    padding: 10px 13px; font: 11.5px/1.8 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+    white-space: pre-wrap; word-break: break-all;
+    text-shadow: 0 0 7px rgba(0, 255, 200, .30);
+  }
+  .log::after { /* CRT 扫描线 */
+    content: ''; position: sticky; display: block; bottom: 0; height: 0;
+  }
+  .terminal::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+    background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .22) 0 1px, transparent 1px 3px);
+    mix-blend-mode: multiply; opacity: .55;
+  }
+  .terminal::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 1; border-radius: inherit;
+    background: radial-gradient(ellipse at center, transparent 62%, rgba(0, 10, 25, .5));
+  }
+  .log::-webkit-scrollbar { width: 8px; }
+  .log::-webkit-scrollbar-thumb { background: rgba(0, 255, 229, .20); border-radius: 4px; }
+  .log::-webkit-scrollbar-track { background: transparent; }
+  .cursor { display: inline-block; width: 7px; height: 13px; background: #00ffe5; vertical-align: -2px; margin-left: 2px; box-shadow: 0 0 8px rgba(0, 255, 229, .9); animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="17 8 12 3 7 8" />
+        <line x1="12" y1="3" x2="12" y2="15" />
+      </svg>
+    </div>
+    <div>
+      <h1>更新包上传</h1>
+      <div class="sub">打包测试版安装包并投放到更新服务器；已安装客户端会自动收到新版本提示</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>服务器与令牌 <small>更新上传通道</small></h2>
+    <div class="row">
+      <label class="lbl">环境</label>
+      <select id="env">
+        <option value="test" selected>测试 http://192.168.200.1:48080</option>
+      </select>
+      <button id="openFeed" class="tint">打开静态资源目录</button>
+      <span id="envState" class="badge" style="display:none">已配置</span>
+    </div>
+    <details class="adv">
+      <summary>高级：接口地址与令牌（一般不用改）</summary>
+      <div class="row" style="margin-top:8px">
+        <label class="lbl">接口基址</label>
+        <input type="text" id="base">
+      </div>
+      <div class="row">
+        <label class="lbl">上传令牌</label>
+        <input type="password" id="token" placeholder="X-Update-Token" autocomplete="off">
+        <button id="toggleToken" style="flex:none">显示</button>
+      </div>
+      <div class="hint">令牌仅保存在本机浏览器存储，勿截图外传。生产不走本工具：生产包由运维渠道上传到运维提供的临时地址。</div>
+    </details>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>一键全自动 <small>打测试包并上传投放</small></h2>
+      <div class="hint" style="margin:2px 0 12px">清理上次产物 → 构建 win 测试包 → 压 zip → 分片上传 → 合并投放，全程自动，构建约 1-3 分钟；过程日志见下方终端。</div>
+      <div class="row">
+        <button id="autoBtn" class="primary">开始全自动</button>
+        <span class="hint" style="margin:0">工程版本 <span class="ver" id="curVer">—</span>（版本号在 package.json 里改）</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>手动上传 <small>选择已打好的 zip</small></h2>
+      <div class="hint" style="margin:2px 0 2px">适合上传现成的安装包 zip，或一键打包完成后单独重传。</div>
+      <div class="drop" id="drop">
+        <b>点击选择</b> 或把 zip 拖到这里<br>
+        <span style="font-size:12px">应包含 exe、exe.blockmap、latest.yml（可用 <code class="k">node scripts/pack-update-zip.mjs</code> 生成）</span>
+      </div>
+      <input type="file" id="file" accept=".zip" style="display:none">
+      <div id="fileMeta" class="filemeta" style="display:none; margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>上传与投放进度</h2>
+    <div class="row" style="margin-top:6px">
+      <button id="startBtn" class="primary" disabled>开始上传</button>
+      <button id="pauseBtn" disabled>暂停</button>
+      <button id="retryBtn" style="display:none">重试投放</button>
+      <span id="phase" class="phase"><span class="spin"></span><span id="phaseText">等待选择文件</span></span>
+    </div>
+    <div class="bar" id="barBox"><i id="barFill"></i></div>
+    <div class="stat"><span id="statLeft">—</span><span id="statRight"></span></div>
+    <div id="err" class="err"></div>
+    <div id="doneBox" style="display:none">
+      <div class="hint" style="color:#248a3d"><span class="ok-ico">✓</span>已发布到静态目录，客户端会在下次检查时收到更新提示。</div>
+      <div class="filemeta" id="doneMeta" style="margin-left:26px"></div>
+    </div>
+  </div>
+
+  <div class="terminal">
+    <div class="term-head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="title">uploader.log</span></div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">已发布内容 <small>服务器上的文件，点击可下载核对</small></h2>
+      <button id="pubBtn" class="tint">查询</button>
+    </div>
+    <div id="pubBox" class="hint" style="margin-top:10px">用于确认投放结果与历史版本占用（latest.yml 与最新 exe 永不被覆盖删除）。</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict'
+
+  // ================= 配置 =================
+  // 测试令牌由后台下发，写死为默认值（可在高级设置里覆盖）。
+  // 生产不走本工具：生产包由运维提供的渠道上传到运维给的临时地址，确认后才移入正式地址。
+  var DEFAULTS = {
+    test: {
+      base: 'http://192.168.200.1:48080',
+      token: 'sk-update-test-f59ee86ca3b279e6b68352b122b47c8919417e48db9d3b38'
+    },
+    prod: {
+      base: 'https://www.danaai.net/astongai',
+      token: ''
+    }
+  }
+  var MAX_SIZE = 2 * 1024 * 1024 * 1024 // 2 GiB，与服务端一致
+  var CONCURRENCY = 3                    // 文档建议并发 ≤ 3
+  var CHUNK_RETRIES = 3                  // 单分片重试次数
+  var COMPLETE_TIMEOUT_MS = 10 * 60 * 1000 // complete 含合并/解压/投放，放宽到 10 分钟
+
+  // 文档 §5 错误码 → 处理提示
+  var CODE_HINTS = {
+    1050000220: '更新上传通道未配置或已关闭，请联系后端',
+    1050000221: '上传令牌无效，请核对令牌后重试',
+    1050000222: '会话不存在或状态不允许，请重新开始上传',
+    1050000223: '分片序号不合法，请重新开始上传',
+    1050000224: '分片大小与预期不符，请重新开始上传',
+    1050000225: '分片不完整：按提示补传缺口后重试投放',
+    1050000226: 'SHA-256 校验失败：会话仍在，可重试上传（已传分片会跳过）',
+    1050000227: 'ZIP 无效或不安全（损坏/路径穿越/超限），请检查打包产物',
+    1050000228: 'ZIP 内缺少 latest.yml，请确认用 scripts/pack-update-zip.mjs 打包',
+    1050000229: '发布写入失败（服务端磁盘等），请联系后端排查',
+    1050000230: '文件名或大小不满足要求（仅支持 .zip，≤ 2GiB）'
+  }
+  var FATAL_CODES = { 1050000220: 1, 1050000221: 1 }
+
+  // ================= 状态 =================
+  var S = {
+    env: 'test',
+    file: null,
+    sha256: null,
+    uploadId: null,
+    chunkSize: 0,
+    chunkCount: 0,
+    received: {},
+    inflight: {},
+    phase: 'idle', // idle|building|hashing|creating|uploading|pausing|paused|completing|done|error
+    paused: false,
+    errMsg: '',
+    lastTick: { t: 0, b: 0, speed: 0 }
+  }
+  var currentXhrs = []
+  var AUTO_BUSY = false
+
+  // ================= DOM =================
+  function $(id) { return document.getElementById(id) }
+  var el = {
+    env: $('env'), envState: $('envState'), base: $('base'), token: $('token'), toggleToken: $('toggleToken'),
+    openFeed: $('openFeed'),
+    autoBtn: $('autoBtn'), curVer: $('curVer'),
+    drop: $('drop'), file: $('file'), fileMeta: $('fileMeta'),
+    startBtn: $('startBtn'), pauseBtn: $('pauseBtn'), retryBtn: $('retryBtn'), phase: $('phase'), phaseText: $('phaseText'),
+    barBox: $('barBox'), barFill: $('barFill'), statLeft: $('statLeft'), statRight: $('statRight'),
+    err: $('err'), doneBox: $('doneBox'), doneMeta: $('doneMeta'),
+    pubBtn: $('pubBtn'), pubBox: $('pubBox'), log: $('log')
+  }
+
+  // ================= 工具 =================
+  // 终端光标：始终跟随日志末尾
+  var cursorSpan = document.createElement('span')
+  cursorSpan.className = 'cursor'
+  function log(msg) {
+    var d = new Date()
+    var ts = [d.getHours(), d.getMinutes(), d.getSeconds()].map(function (n) { return String(n).padStart(2, '0') }).join(':')
+    el.log.appendChild(document.createTextNode('[' + ts + '] ' + msg + '\n'))
+    while (el.log.childNodes.length > 300) el.log.removeChild(el.log.firstChild)
+    if (cursorSpan.parentNode !== el.log) el.log.appendChild(cursorSpan)
+    el.log.scrollTop = el.log.scrollHeight
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms) }) }
+
+  function fmtSize(n) {
+    if (!n && n !== 0) return '—'
+    var u = ['B', 'KB', 'MB', 'GB'], i = 0
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++ }
+    return n.toFixed(i ? 1 : 0) + ' ' + u[i]
+  }
+
+  function apiErr(status, json) {
+    var e = new Error((json && json.msg) || ('HTTP ' + status))
+    e.code = json ? json.code : status
+    return e
+  }
+
+  function hintOf(e) {
+    var h = CODE_HINTS[e.code]
+    return h ? (e.message ? h + '：' + e.message : h) : (e.message || '未知错误')
+  }
+
+  function busy() {
+    return S.phase === 'building' || S.phase === 'hashing' || S.phase === 'creating' || S.phase === 'uploading' ||
+      S.phase === 'pausing' || S.phase === 'completing'
+  }
+
+  function store(key, val) {
+    try {
+      if (val === undefined) return localStorage.getItem('updTool.' + S.env + '.' + key)
+      localStorage.setItem('updTool.' + S.env + '.' + key, val)
+    } catch (_) { return null }
+  }
+
+  // ================= 服务器配置 =================
+  function loadEnvConf() {
+    el.base.value = store('base') || DEFAULTS[S.env].base
+    el.token.value = store('token') !== null ? store('token') : DEFAULTS[S.env].token
+    el.envState.style.display = el.token.value ? '' : 'none'
+  }
+
+  el.env.addEventListener('change', function () {
+    if (busy()) { el.env.value = S.env; alert('上传进行中，不能切换环境'); return }
+    S.env = el.env.value
+    loadEnvConf()
+    log('切换环境：' + el.base.value)
+  })
+  el.base.addEventListener('change', function () { store('base', el.base.value.trim()) })
+  el.token.addEventListener('change', function () {
+    store('token', el.token.value.trim())
+    el.envState.style.display = el.token.value ? '' : 'none'
+  })
+  el.toggleToken.addEventListener('click', function () {
+    var show = el.token.type === 'password'
+    el.token.type = show ? 'text' : 'password'
+    el.toggleToken.textContent = show ? '隐藏' : '显示'
+  })
+
+  function apiBase() { return el.base.value.trim().replace(/\/+$/, '') }
+  // 所有更新服务器请求都经本地服务同源转发（/api/proxy/*），由 node 直连后端：
+  // 规避 Chrome 对「localhost 页面直连内网 IP」的拦截与系统代理干扰
+  function uploadApi() { return '/api/proxy/admin-api/declaration/agent-update' }
+  function feedUrl() { return apiBase() + '/agent-update/' }
+  function tok() { return el.token.value.trim() }
+
+  // 打开在线更新静态资源服务器地址：直接看投放目录里的 exe / latest.yml 等文件是否正确
+  // 打开在线更新静态资源目录。
+  // 注意：后端对目录根 /agent-update/ 没有索引功能（返回 JSON 404 包装），
+  // 所以这里用 /published 接口生成目录索引页，每个文件都链到真实的静态资源地址，点击即可下载核对。
+  // 弹窗被拦截的环境（如内嵌浏览器）退化为页面内浮层。
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    })
+  }
+  function indexBoxInner(data) {
+    var files = (data.files || []).slice().sort(function (a, b) { return String(b.lastModified).localeCompare(String(a.lastModified)) })
+    function fmtTime(v) {
+      var n = Number(v)
+      if (Number.isFinite(n) && n > 0) {
+        var d = new Date(n)
+        var p = function (x) { return String(x).padStart(2, '0') }
+        return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+          p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+      }
+      return String(v)
+    }
+    var rows = files.map(function (f) {
+      var latest = data.latestVersion && f.name.indexOf(data.latestVersion) >= 0
+      var href = feedUrl() + encodeURIComponent(f.name)
+      return '<tr style="' + (latest ? 'font-weight:600' : '') + '">' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #eee;word-break:break-all">' +
+        '<a href="' + href + '" style="color:' + (latest ? '#0066cc' : '#1d1d1f') + '">' + escapeHtml(f.name) + '</a>' +
+        (latest ? ' <span style="color:#0066cc;font-weight:400">← latest.yml 指向的当前版本</span>' : '') +
+        '</td><td style="padding:8px 10px;border-bottom:1px solid #eee;white-space:nowrap">' + fmtSize(f.size) + '</td>' +
+        '<td style="padding:8px 10px;border-bottom:1px solid #eee;white-space:nowrap">' + fmtTime(f.lastModified) + '</td></tr>'
+    }).join('')
+    return '<h1>在线更新静态资源目录</h1>' +
+      '<div class="u">' + escapeHtml(feedUrl()) + '</div>' +
+      '<div style="font-size:12.5px;color:#86868b">目录根本身没有索引页（后端返回 JSON 404 包装），本页由 /published 接口生成；' +
+      '点击文件名即可从静态资源服务器下载核对。latest.yml（<a href="' + feedUrl() + 'latest.yml" target="_blank">直接打开</a>）指向当前版本 ' +
+      '<b>' + escapeHtml(data.latestVersion || '—') + '</b>。</div>' +
+      '<table><thead><tr><th>文件</th><th>大小</th><th>更新时间</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="3" style="padding:14px 10px;color:#86868b">目录为空，还没有投放过任何文件</td></tr>') +
+      '</tbody></table>'
+  }
+  var BOX_CSS = 'body{font:14px/1.6 -apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;color:#1d1d1f;margin:0;padding:36px 20px;background:#f5f5f7}' +
+    '.box{max-width:860px;margin:0 auto;background:#fff;border-radius:16px;padding:22px 24px;box-shadow:0 2px 10px rgba(0,0,0,.05)}' +
+    'h1{font-size:19px;margin:0 0 4px}.u{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#0066cc;word-break:break-all;margin-bottom:6px}' +
+    'table{width:100%;border-collapse:collapse;margin-top:12px}th{text-align:left;font-size:12.5px;color:#86868b;padding:6px 10px;border-bottom:1px solid #eee}'
+  el.openFeed.addEventListener('click', async function () {
+    var w = null
+    try { w = window.open('', '_blank') } catch (_) { w = null }
+    try {
+      var data = await jsonReq('GET', uploadApi() + '/published')
+      var inner = indexBoxInner(data)
+      var count = (data.files || []).length
+      var via = 'overlay'
+      try {
+        if (!w) throw new Error('no popup')
+        var doc = w.document
+        doc.open()
+        doc.write('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>静态资源目录 · ' +
+          escapeHtml(feedUrl()) + '</title><style>' + BOX_CSS + '</style></head><body><div class="box">' + inner + '</div></body></html>')
+        doc.close()
+        via = 'popup'
+      } catch (_) {
+        if (w) { try { w.close() } catch (_) {} }
+        showFeedOverlay(inner)
+      }
+      log(via === 'popup'
+        ? '已在新窗口打开静态资源目录索引页（' + count + ' 个文件，当前版本 ' + (data.latestVersion || '—') + '）'
+        : '弹窗不可用，已在页面内展示静态资源目录（' + count + ' 个文件，当前版本 ' + (data.latestVersion || '—') + '）')
+    } catch (e) {
+      if (w) { try { w.close() } catch (_) {} }
+      alert('获取静态资源目录失败：' + hintOf(e))
+      log('✗ 打开静态资源目录失败：' + hintOf(e))
+    }
+  })
+  function showFeedOverlay(inner) {
+    var ov = document.getElementById('feedOverlay')
+    if (!ov) {
+      ov = document.createElement('div')
+      ov.id = 'feedOverlay'
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.42);z-index:60;overflow:auto;padding:34px 14px'
+      // 只通过「关闭」按钮或 Esc 关闭：点背景关闭容易被误触
+      var onKey = function (e) {
+        if (e.key === 'Escape') {
+          var o = document.getElementById('feedOverlay')
+          if (o) o.remove()
+          document.removeEventListener('keydown', onKey)
+        }
+      }
+      document.addEventListener('keydown', onKey)
+      var scoped = document.createElement('style')
+      scoped.textContent = BOX_CSS.replace(/body\{[^}]*\}/, '')
+      ov.appendChild(scoped)
+    }
+    var panel = document.createElement('div')
+    panel.style.cssText = 'max-width:900px;margin:0 auto;position:relative'
+    var close = document.createElement('button')
+    close.textContent = '关闭'
+    close.style.cssText = 'position:absolute;right:0;top:-8px;z-index:2'
+    close.addEventListener('click', function () { ov.remove() })
+    var box = document.createElement('div')
+    box.className = 'box'
+    box.innerHTML = inner
+    panel.appendChild(close)
+    panel.appendChild(box)
+    ov.appendChild(panel)
+    ov.scrollTop = 0
+  }
+
+  // ================= 一键全自动（走本地 node 服务） =================
+  async function refreshCurVer() {
+    try {
+      var st = await (await fetch('/api/job')).json()
+      if (st.version) el.curVer.textContent = 'v' + st.version
+    } catch (_) {}
+  }
+
+  async function autoRun() {
+    if (busy() || AUTO_BUSY) return
+    AUTO_BUSY = true
+    el.autoBtn.disabled = true
+    el.err.textContent = ''
+    el.doneBox.style.display = 'none'
+    try {
+      var buildStart = Date.now()
+      setPhase('building', '打包 win 测试包…')
+      log('一键全自动开始：构建 → 压 zip → 上传 → 投放')
+
+      var r = await fetch('/api/build', { method: 'POST' })
+      var j = await r.json().catch(function () { return null })
+      if (!j || !j.started) throw new Error((j && j.reason) || '无法启动打包（可能已有构建任务在跑）')
+
+      // 轮询构建进度，构建日志增量并入下方共享终端
+      var st
+      var seen = 0
+      while (true) {
+        await sleep(900)
+        st = await (await fetch('/api/job')).json()
+        var lines = st.log || []
+        if (lines.length < seen) seen = 0
+        if (lines.length > seen) {
+          lines.slice(seen).forEach(function (l) { if (l.trim()) log(l) })
+          seen = lines.length
+        }
+        if (st.running) {
+          setPhase('building', '打包中…（已进行 ' + Math.round((Date.now() - buildStart) / 1000) + ' 秒）')
+          continue
+        }
+        if (st.error) throw new Error('打包失败：' + st.error)
+        if (st.ok && st.zipName) break
+        throw new Error('打包失败，详见日志')
+      }
+      log('打包完成：' + st.zipName + '（' + fmtSize(st.zipSize) + '，v' + st.version + '）')
+      refreshCurVer()
+
+      // 从本地服务取 zip 内容，直接进入既有上传管线
+      setPhase('building', '读取安装包…')
+      var resp = await fetch('/api/zip-file')
+      if (!resp.ok) throw new Error('读取打包产物失败')
+      var blob = await resp.blob()
+      var f = new File([blob], st.zipName, { type: 'application/zip' })
+      pickFile(f)
+      await start()
+    } catch (e) {
+      handleFailure(e)
+    } finally {
+      AUTO_BUSY = false
+      el.autoBtn.disabled = false
+    }
+  }
+  el.autoBtn.addEventListener('click', autoRun)
+
+  // ================= 文件选择（手动） =================
+  el.drop.addEventListener('click', function () { el.file.click() })
+  el.drop.addEventListener('dragover', function (e) { e.preventDefault(); el.drop.classList.add('on') })
+  el.drop.addEventListener('dragleave', function () { el.drop.classList.remove('on') })
+  el.drop.addEventListener('drop', function (e) {
+    e.preventDefault(); el.drop.classList.remove('on')
+    if (busy()) return
+    var f = e.dataTransfer.files && e.dataTransfer.files[0]
+    if (f) pickFile(f)
+  })
+  el.file.addEventListener('change', function () {
+    if (!busy() && el.file.files[0]) pickFile(el.file.files[0])
+  })
+
+  function pickFile(f) {
+    if (!/\.zip$/i.test(f.name)) { alert('只支持 .zip 安装包'); return }
+    if (f.size > MAX_SIZE) { alert('文件超过 2GiB 上限'); return }
+    resetUpload()
+    S.file = f
+    el.fileMeta.style.display = ''
+    el.fileMeta.textContent = f.name + ' · ' + fmtSize(f.size)
+    setPhase('idle', '已选择，点「开始上传」')
+    el.startBtn.disabled = false
+    log('已选择 ' + f.name + '（' + fmtSize(f.size) + '）')
+  }
+
+  function resetUpload() {
+    currentXhrs.slice().forEach(function (x) { try { x.abort() } catch (_) {} })
+    S.file = null; S.sha256 = null; S.uploadId = null
+    S.chunkSize = 0; S.chunkCount = 0; S.received = {}; S.inflight = {}
+    S.phase = 'idle'; S.paused = false; S.errMsg = ''
+    el.err.textContent = ''
+    el.doneBox.style.display = 'none'
+    el.retryBtn.style.display = 'none'
+    el.pauseBtn.disabled = true
+    el.startBtn.disabled = true
+    el.barFill.style.width = '0'
+    el.statLeft.textContent = '—'; el.statRight.textContent = ''
+    setPhase('idle', '等待选择文件')
+  }
+
+  // ================= SHA-256 =================
+  function computeSha256(file) {
+    return file.arrayBuffer().then(function (buf) {
+      return crypto.subtle.digest('SHA-256', buf)
+    }).then(function (d) {
+      var arr = new Uint8Array(d), hex = ''
+      for (var i = 0; i < arr.length; i++) hex += arr[i].toString(16).padStart(2, '0')
+      return hex
+    })
+  }
+
+  // ================= JSON 接口 =================
+  function jsonReq(method, url, body) {
+    var ctrl = new AbortController()
+    var timer = setTimeout(function () { ctrl.abort() }, method === 'POST' && /\/complete$/.test(url) ? COMPLETE_TIMEOUT_MS : 30000)
+    return fetch(url, {
+      method: method,
+      headers: { 'X-Update-Token': tok(), 'X-Target-Base': apiBase(), 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: ctrl.signal
+    }).then(function (res) {
+      return res.json().catch(function () { return null }).then(function (json) {
+        if (!res.ok || !json || json.code !== 0) throw apiErr(res.status, json)
+        return json.data
+      })
+    }).finally(function () { clearTimeout(timer) })
+  }
+
+  // ================= 分片上传（XHR 才有上传进度） =================
+  function putChunk(index, blob) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest()
+      S.inflight[index] = 0
+      xhr.open('PUT', uploadApi() + '/uploads/' + S.uploadId + '/chunks/' + index)
+      xhr.setRequestHeader('X-Update-Token', tok())
+      xhr.setRequestHeader('X-Target-Base', apiBase())
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+      xhr.timeout = 120000
+      var settled = false
+      function finish(fn, arg) {
+        if (settled) return
+        settled = true
+        var i = currentXhrs.indexOf(xhr)
+        if (i >= 0) currentXhrs.splice(i, 1)
+        delete S.inflight[index]
+        fn(arg)
+      }
+      xhr.upload.onprogress = function (e) { S.inflight[index] = e.loaded; renderProgress() }
+      xhr.onload = function () {
+        var json = null
+        try { json = JSON.parse(xhr.responseText) } catch (_) {}
+        if (xhr.status >= 200 && xhr.status < 300 && json && json.code === 0) finish(resolve, json.data)
+        else finish(reject, apiErr(xhr.status, json))
+      }
+      xhr.onerror = function () { finish(reject, new Error('网络错误')) }
+      xhr.ontimeout = function () { finish(reject, new Error('分片上传超时')) }
+      xhr.onabort = function () {
+        var e = new Error('已暂停'); e.aborted = true; finish(reject, e)
+      }
+      currentXhrs.push(xhr)
+      xhr.send(blob)
+    })
+  }
+
+  // ================= 进度渲染 =================
+  function chunkBytes(i) {
+    return Math.min(S.chunkSize, S.file.size - i * S.chunkSize)
+  }
+  function doneBytes() {
+    var b = 0
+    for (var i = 0; i < S.chunkCount; i++) {
+      if (S.received[i]) b += chunkBytes(i)
+    }
+    for (var k in S.inflight) b += S.inflight[k] || 0
+    return Math.min(b, S.file ? S.file.size : b)
+  }
+  function renderProgress() {
+    if (!S.file || !S.chunkCount) return
+    var d = doneBytes()
+    var pct = Math.floor((d / S.file.size) * 100)
+    el.barFill.style.width = pct + '%'
+    var now = Date.now()
+    if (!S.lastTick.t) S.lastTick = { t: now, b: d, speed: 0 }
+    if (now - S.lastTick.t > 800) {
+      var dt = (now - S.lastTick.t) / 1000
+      var sp = Math.max(0, (d - S.lastTick.b) / dt)
+      S.lastTick.speed = S.lastTick.speed ? S.lastTick.speed * 0.6 + sp * 0.4 : sp
+      S.lastTick.t = now; S.lastTick.b = d
+    }
+    el.statLeft.textContent = pct + '% · ' + fmtSize(d) + ' / ' + fmtSize(S.file.size)
+    el.statRight.textContent = S.phase === 'uploading' && S.lastTick.speed ? (fmtSize(S.lastTick.speed) + '/s') : ''
+  }
+
+  // ================= 主流程 =================
+  el.startBtn.addEventListener('click', start)
+  el.pauseBtn.addEventListener('click', pause)
+  el.retryBtn.addEventListener('click', retryComplete)
+
+  function setPhase(p, text) {
+    S.phase = p
+    el.phaseText.textContent = text
+    var busyCls = ['building', 'hashing', 'creating', 'completing', 'pausing', 'uploading'].indexOf(p) >= 0
+    el.phase.className = 'phase' + (busyCls ? ' busy' : '') + (p === 'done' ? ' ok' : '') + (p === 'error' ? ' bad' : '')
+    el.barBox.className = 'bar' + (p === 'uploading' ? ' live' : '')
+    el.startBtn.disabled = busy() || !S.file
+    el.pauseBtn.disabled = S.phase !== 'uploading'
+  }
+
+  async function start() {
+    if (!S.file) return
+    el.err.textContent = ''
+    el.doneBox.style.display = 'none'
+    S.paused = false
+
+    try {
+      // 1) SHA-256（失败可跳过，仅失去合并强校验）
+      if (!S.sha256) {
+        setPhase('hashing', '正在计算 SHA-256…')
+        try {
+          S.sha256 = await computeSha256(S.file)
+          log('SHA-256 = ' + S.sha256)
+        } catch (e) {
+          log('SHA-256 计算失败（' + e.message + '），跳过强校验继续上传')
+        }
+      }
+
+      // 2) 创建/复用会话（同名同大小自动续传）
+      setPhase('creating', '正在创建上传会话…')
+      var data = await jsonReq('POST', uploadApi() + '/uploads', {
+        fileName: S.file.name,
+        fileSize: S.file.size,
+        fileSha256: S.sha256 || undefined
+      })
+      S.uploadId = data.uploadId
+      S.chunkSize = data.chunkSize
+      S.chunkCount = data.chunkCount
+      S.received = {}
+      var skipped = (data.receivedChunkIndexes || []).length
+      for (var i = 0; i < skipped; i++) S.received[data.receivedChunkIndexes[i]] = true
+      log('会话 ' + S.uploadId + '：' + S.chunkCount + ' 片 × ' + fmtSize(S.chunkSize) +
+        (skipped ? '，续传跳过 ' + skipped + ' 片' : ''))
+
+      // 3) 补传缺口
+      await uploadChunks()
+
+      // 4) 合并投放
+      await complete()
+    } catch (e) {
+      handleFailure(e)
+    }
+  }
+
+  function uploadChunks() {
+    setPhase('uploading', '上传中…')
+    S.lastTick = { t: 0, b: 0, speed: 0 }
+    var todo = []
+    for (var i = 0; i < S.chunkCount; i++) if (!S.received[i]) todo.push(i)
+    if (!todo.length) return Promise.resolve()
+    var cursor = 0
+    var workers = []
+    var fatal = null
+    for (var w = 0; w < Math.min(CONCURRENCY, todo.length); w++) {
+      workers.push((async function () {
+        while (cursor < todo.length && !S.paused && !fatal) {
+          var idx = todo[cursor++]
+          var blob = S.file.slice(idx * S.chunkSize, idx * S.chunkSize + chunkBytes(idx))
+          for (var attempt = 0; attempt <= CHUNK_RETRIES; attempt++) {
+            try {
+              await putChunk(idx, blob)
+              S.received[idx] = true
+              renderProgress()
+              break
+            } catch (e) {
+              if (e.aborted) return
+              if (e.code && FATAL_CODES[e.code]) { fatal = e; return }
+              if (attempt >= CHUNK_RETRIES) { fatal = e; return }
+              var wait = 1000 * Math.pow(2, attempt)
+              log('分片 ' + idx + ' 第 ' + (attempt + 1) + ' 次失败（' + hintOf(e) + '），' + wait / 1000 + 's 后重试')
+              await new Promise(function (r) { setTimeout(r, wait) })
+              if (S.paused) return
+            }
+          }
+        }
+      })())
+    }
+    return Promise.all(workers).then(function () {
+      if (fatal) throw fatal
+      if (S.paused) { var e = new Error('已暂停'); e.aborted = true; throw e }
+    })
+  }
+
+  function pause() {
+    if (S.phase !== 'uploading') return
+    S.paused = true
+    setPhase('pausing', '正在暂停…')
+    currentXhrs.slice().forEach(function (x) { try { x.abort() } catch (_) {} })
+    setPhase('paused', '已暂停，可点「开始上传」继续（已传分片自动跳过）')
+    log('上传已暂停，会话保留：' + S.uploadId)
+  }
+
+  async function complete() {
+    setPhase('completing', '服务端合并、校验、投放中…（几百 MB 约需 1-3 分钟，请勿关闭）')
+    el.retryBtn.style.display = 'none'
+    try {
+      var data = await jsonReq('POST', uploadApi() + '/uploads/' + S.uploadId + '/complete')
+      setPhase('done', '发布成功 v' + data.version)
+      el.doneBox.style.display = ''
+      el.doneMeta.textContent = '版本 ' + data.version + ' · 发布时间 ' + data.publishedAt + '\n文件：' + (data.publishedFiles || []).join('、')
+      log('✅ 发布成功：v' + data.version + '（' + (data.publishedFiles || []).join(', ') + '）')
+      el.startBtn.disabled = true
+      queryPublished()
+    } catch (e) {
+      // 幂等：网络类失败可直接重试 complete
+      if (!e.code || e.code >= 500 || /Failed to fetch|abort/i.test(e.message)) {
+        showErr('投放结果未知（' + hintOf(e) + '）。complete 幂等，可直接重试。')
+        el.retryBtn.style.display = ''
+      } else {
+        handleFailure(e)
+      }
+    }
+  }
+
+  function retryComplete() { if (S.uploadId) complete() }
+
+  function handleFailure(e) {
+    if (e.aborted) return
+    console.error(e)
+    showErr(hintOf(e) + (e.code ? '（code ' + e.code + '）' : ''))
+    log('✗ 失败：' + hintOf(e))
+  }
+
+  function showErr(msg) {
+    el.err.textContent = msg
+    el.phase.className = 'phase bad'
+    el.phaseText.textContent = '失败'
+    S.phase = 'error'
+    el.startBtn.disabled = false
+    el.pauseBtn.disabled = true
+  }
+
+  // ================= 已发布查询 =================
+  el.pubBtn.addEventListener('click', queryPublished)
+
+  async function queryPublished() {
+    el.pubBtn.disabled = true
+    el.pubBox.textContent = '查询中…'
+    try {
+      var data = await jsonReq('GET', uploadApi() + '/published')
+      // 服务端实际返回毫秒时间戳（与文档的 yyyy-MM-dd HH:mm:ss 不符），做兼容格式化
+      function fmtTime(v) {
+        var n = Number(v)
+        if (Number.isFinite(n) && n > 0) {
+          var d = new Date(n)
+          var p = function (x) { return String(x).padStart(2, '0') }
+          return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+            p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+        }
+        return String(v)
+      }
+      var rows = '<table><thead><tr><th>文件</th><th>大小</th><th>更新时间</th></tr></thead><tbody>'
+      var files = (data.files || []).slice().sort(function (a, b) { return String(b.lastModified).localeCompare(String(a.lastModified)) })
+      files.forEach(function (f) {
+        var latest = data.latestVersion && f.name.indexOf(data.latestVersion) >= 0
+        var link = '<a href="' + feedUrl() + encodeURIComponent(f.name) + '" target="_blank">' + f.name + '</a>'
+        rows += '<tr' + (latest ? ' class="latest"' : '') + '><td>' + link +
+          (latest ? ' ↑当前' : '') + '</td><td>' + fmtSize(f.size) + '</td><td>' + fmtTime(f.lastModified) + '</td></tr>'
+      })
+      rows += '</tbody></table>'
+      el.pubBox.innerHTML = '<div class="hint" style="margin:0 0 6px">最新版本：<b>' + (data.latestVersion || '—') + '</b></div>' + rows
+      log('已发布最新版本：' + data.latestVersion + '，共 ' + files.length + ' 个文件')
+    } catch (e) {
+      el.pubBox.textContent = '查询失败：' + hintOf(e)
+    } finally {
+      el.pubBtn.disabled = false
+    }
+  }
+
+  // ================= 收尾 =================
+  window.addEventListener('beforeunload', function (e) {
+    if (busy() || AUTO_BUSY) { e.preventDefault(); e.returnValue = '' }
+  })
+
+  loadEnvConf()
+  refreshCurVer()
+  log('投放工具就绪（本地服务模式）。环境：测试 ' + apiBase())
+})()
+</script>
+</body>
+</html>

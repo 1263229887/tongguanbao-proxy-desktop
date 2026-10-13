@@ -854,6 +854,14 @@ export function stopAgent() {
   return patch({ running: false, polling: false })
 }
 
+/** 安装更新/退出前调用：已停代理后等待在途的任务投递与回执上传收尾（各 HTTP 调用有 20s 超时上限） */
+export async function waitIdle(timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  while ((taskBusy || inboxBusy) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 150))
+  }
+}
+
 export async function resumeAgent() {
   if (!state.enabled) {
     clearTimers()

@@ -43,12 +43,16 @@ nsis:
   allowElevation: false
   allowToChangeInstallationDirectory: true
   differentialPackage: true
-  artifactName: ${name}-Setup-${version}.${ext}
+  # 固定安装包文件名（不带版本号）：同名覆盖式投放，更新服务器不留历史版本。
+  # 差分更新不受影响（electron-updater 靠 latest.yml 的 sha512 + 新旧 blockmap 对比，与文件名无关）
+  artifactName: ${name}-Setup.${ext}
   # 控制面板「卸载程序」里显示的名字，避免拼上 package.json 的 author 占位
   uninstallDisplayName: ${productName}
 
-# 自动更新走公开仓库的 Releases；私有仓库需要在客户端内置 PAT，不要那样做。
+# 在线更新 feed（对接文档 §8）：此处写生产地址用于生成包内 app-update.yml；
+# scripts/build.mjs 会按 --env 覆盖为对应环境，运行时 updater.js 再按 appEnv setFeedURL 兜底。
+# 本地构建 publish 策略为 never，这里的配置只影响生成的 app-update.yml，不会上传任何东西。
 publish:
-  provider: github
-  owner: 1263229887
-  repo: tongguanbao-proxy-desktop
+  provider: generic
+  url: https://www.danaai.net/astongai/agent-update/
+  useMultipleRangeRequest: false

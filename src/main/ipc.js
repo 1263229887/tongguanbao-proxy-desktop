@@ -9,7 +9,7 @@ import { checkDir, loadConfig, saveConfig } from './config.js'
 import { run as runLogUpload } from './log-upload.js'
 import { clearLogs, getLogDir, getLogs, listLogFiles, readLogFile } from './logger.js'
 import { getState, runNow, start as startPoller, stop as stopPoller } from './poller.js'
-import { getUpdateState } from './updater.js'
+import { getUpdateState, checkForUpdates, downloadUpdate, quitAndInstall } from './updater.js'
 import { importSwBizDirs } from './sw-import.js'
 import { info, warn } from './logger.js'
 
@@ -103,10 +103,11 @@ export function registerIpc({ onConfigSaved } = {}) {
     }
   })
 
-  // 在线更新暂未接入，且不再对接 GitHub；保留空实现避免渲染层调用报错
-  ipcMain.handle('update:check', () => ({ ok: false, reason: '在线更新暂未接入' }))
+  // 在线更新：发现新版本仅提示，下载与安装都由用户触发；安装前会先收尾代理任务（见 updater.js）
+  ipcMain.handle('update:check', () => checkForUpdates(true))
   ipcMain.handle('update:state', () => getUpdateState())
-  ipcMain.handle('update:install', () => ({ ok: false, reason: '在线更新暂未接入' }))
+  ipcMain.handle('update:download', () => downloadUpdate())
+  ipcMain.handle('update:install', () => quitAndInstall())
 }
 
 export { broadcast }
