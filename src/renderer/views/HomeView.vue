@@ -52,7 +52,7 @@ const uptime = computed(() => formatUptime(now.value - (meta.value?.startedAt ??
 const updateTip = computed(() => {
   const s = updateState.value
   if (s.status === 'updateAvailable') {
-    return `发现新版本 v${s.version ?? '—'}，可前往「关于」页下载安装；不会自动下载，也不影响当前业务任务`
+    return `发现新版本 v${s.version ?? '—'}，可前往「关于」页下载安装`
   }
   if (s.status === 'downloaded') {
     return `新版本 v${s.version ?? '—'} 已下载完成，可前往「关于」页重启安装`

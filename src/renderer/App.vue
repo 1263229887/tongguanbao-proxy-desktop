@@ -33,7 +33,7 @@ watch(
     if (st === 'updateAvailable') {
       ElNotification({
         title: '发现新版本',
-        message: `v${updateState.value.version ?? '—'} 已发布，可前往「关于」页下载安装（不会自动下载、不影响业务任务）`,
+        message: `v${updateState.value.version ?? '—'} 已发布，可前往「关于」页下载安装`,
         duration: 12000,
         onClick: () => go('about')
       })

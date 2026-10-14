@@ -32,7 +32,7 @@ export const autoStart = ref({ openAtLogin: false, willLaunch: false, managed: f
 export const updateState = ref({
   status: 'idle',
   version: null,
-  size: null,
+  downloadSize: null,
   percent: 0,
   note: null,
   error: null,
