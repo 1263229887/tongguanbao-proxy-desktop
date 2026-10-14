@@ -42,6 +42,25 @@ let suppressExitFlush = false
 let channelClosedNoticed = false
 let uploadError = ''
 
+// ---------- 上传通道翻转记录（边沿触发） ----------
+// 平台重启/断网等导致的可重试失败（网络错误、5xx/502 网关）：首次记异常日志，
+// 之后的成功上传记一条恢复日志并给出中断时长——排障时一对记录就是一个完整故障窗口。
+// 断开期间不触发即时上传（必然失败），中断记录已写入本地日志，恢复后由重试/补传自然带到平台。
+let channelDownSince = null
+
+function noteUploadChannelDown(firstErr) {
+  if (channelDownSince) return
+  channelDownSince = Date.now()
+  reportAnomaly('upload-channel-down', `日志上传通道不可用：${firstErr}，将自动重试并在恢复后补传`, { upload: false })
+}
+
+function noteUploadChannelUp() {
+  if (!channelDownSince) return
+  const durMin = Math.round((Date.now() - channelDownSince) / 60_000)
+  channelDownSince = null
+  info(`日志上传通道已恢复，本次中断持续约 ${durMin} 分钟`, 'upload')
+}
+
 // ---------- 异常自动上报 ----------
 // 触发即写一条 WARN（进当天日志、随后随异常上传带上去），并立即补传当天日志。
 // 同类异常按类型去重节流，避免刷屏与重复上传；异常期临时把写盘级别提到 debug
@@ -104,7 +123,7 @@ async function uploadOne(cfg, file) {
   } catch (e) {
     warn(`日志压缩失败 ${file.name}：${e.message}`, 'upload')
     upsertLogUpload({ ...base, state: 'FAILED', nextRetryAt: null, message: `压缩失败：${e.message}` })
-    return 'FAILED'
+    return { state: 'FAILED', msg: `压缩失败：${e.message}` }
   }
 
   if (truncated) warn(`日志文件过大（${kb(file.size)}），仅上传尾部 ${kb(TAIL_BYTES)}：${file.name}`, 'upload')
@@ -130,7 +149,7 @@ async function uploadOne(cfg, file) {
     })
     info(`日志已上传 ${uploadName} 原始 ${kb(file.size)} → 压缩 ${kb(gz.length)}${res.data?.id != null ? ` id=${res.data.id}` : ''}`, 'upload')
     uploadError = ''
-    return 'UPLOADED'
+    return { state: 'UPLOADED', msg: '' }
   }
 
   // 平台未开启日志上传通道：不是本机故障，静默记终态，不进心跳 lastError
@@ -140,7 +159,7 @@ async function uploadOne(cfg, file) {
       channelClosedNoticed = true
       info(`平台未开启日志上传通道，日志继续保留在本机（${res.msg}）`, 'upload')
     }
-    return 'BLOCKED'
+    return { state: 'BLOCKED', msg: res.msg }
   }
 
   // 内容本身不被接受（空文件/超限/类型不允许/实例名缺失）：重传不会有别的结果，直接终态
@@ -153,29 +172,29 @@ async function uploadOne(cfg, file) {
   if (rejected.includes(res.code)) {
     warn(`日志被平台拒绝 ${uploadName}（code=${res.code}）：${res.msg}`, 'upload')
     upsertLogUpload({ ...base, state: 'FAILED', nextRetryAt: null, message: res.msg })
-    return 'FAILED'
+    return { state: 'FAILED', msg: res.msg }
   }
 
   // 鉴权失效 / 前置机通道关闭：重传同样会被拒，记 BLOCKED 等配置变更后再试，不空转
   if (res.fatal) {
     warn(`日志上传被拒绝 ${uploadName}（HTTP ${res.httpStatus}）：${res.msg}`, 'upload')
     upsertLogUpload({ ...base, state: 'BLOCKED', nextRetryAt: null, message: res.msg })
-    return 'BLOCKED'
+    return { state: 'BLOCKED', msg: res.msg }
   }
 
-  // 网络或服务端临时错误：按 1/5/15 分钟退避重试
+  // 网络或服务端临时错误（含接口 500「系统异常」）：按 1/5/15 分钟退避重试
   const retryCount = (prev?.retryCount ?? 0) + 1
   const delayMin = RETRY_DELAYS_MIN[retryCount - 1]
   if (delayMin) {
     warn(`日志上传失败 ${uploadName}，${delayMin} 分钟后重试（第 ${retryCount} 次）：${res.msg}`, 'upload')
     upsertLogUpload({ ...base, state: 'RETRY_PENDING', retryCount, nextRetryAt: Date.now() + delayMin * 60_000, message: res.msg })
-    return 'RETRY_PENDING'
+    return { state: 'RETRY_PENDING', msg: res.msg }
   }
 
   uploadError = `日志上传连续 ${retryCount} 次失败：${res.msg}`
   warn(`${uploadError}，已停止重试并通过心跳上报`, 'upload')
   upsertLogUpload({ ...base, state: 'FAILED', retryCount, nextRetryAt: null, message: res.msg })
-  return 'FAILED'
+  return { state: 'FAILED', msg: res.msg }
 }
 
 /**
@@ -186,7 +205,7 @@ async function uploadOne(cfg, file) {
  * 忽略重试退避，并强制重传当天文件（内容可能没变，但用户点上传就该真的传上去）。
  */
 export async function run({ includeToday = false, force = false } = {}) {
-  const done = { uploaded: 0, failed: 0, blocked: 0, skipped: 0 }
+  const done = { uploaded: 0, failed: 0, blocked: 0, skipped: 0, errors: [] }
   // 占位要放在第一个 await 之前：定时轮次和退出前的 flushNow 可能同时进来，
   // 先 await 再占位的话两边都会通过检查，同一个文件被压缩上传两遍。
   // 手动上传则等在途轮次结束（最多 30 秒）再接管，保证点一下就真的传
@@ -198,7 +217,6 @@ export async function run({ includeToday = false, force = false } = {}) {
   busy = true
   try {
     const cfg = await loadConfig()
-    if (!cfg.logUpload.enabled) return done
     // 密钥/实例名没配好时传不了。首次启动、用户还没填参数就会走到这里，不记日志免得刷屏
     if (missingAccess(cfg).length) return done
     await initLedger()
@@ -234,12 +252,24 @@ export async function run({ includeToday = false, force = false } = {}) {
         done.skipped++
         continue
       }
-      const state = await uploadOne(cfg, file)
-      if (state === 'UPLOADED') done.uploaded++
-      else if (state === 'FAILED') done.failed++
-      else if (state === 'BLOCKED') done.blocked++
+      const outcome = await uploadOne(cfg, file)
+      if (outcome.state === 'UPLOADED') done.uploaded++
+      else if (outcome.state === 'FAILED') {
+        done.failed++
+        done.errors.push({ fileName: file.name, msg: outcome.msg })
+      } else if (outcome.state === 'RETRY_PENDING') {
+        // 进入重试 = 通道临时不可用（网络错误/5xx/502 网关等），记录翻转边沿
+        noteUploadChannelDown(outcome.msg)
+        // 手动上传视角：这次点了没传上去就是失败，且要把接口的报错原文带出去
+        if (force) {
+          done.failed++
+          done.errors.push({ fileName: file.name, msg: outcome.msg })
+        } else done.skipped++
+      } else if (outcome.state === 'BLOCKED') done.blocked++
       else done.skipped++
     }
+    // 本轮有成功上传且无临时失败 = 通道恢复（若此前处于中断窗口，记录恢复时长）
+    if (done.uploaded > 0 && !done.errors.length && done.failed === 0) noteUploadChannelUp()
     return done
   } catch (e) {
     warn(`日志上传轮次异常：${e.message}`, 'upload')
@@ -261,8 +291,7 @@ export function suppressNextExitFlush() {
 
 export async function start({ resetTerminal = false } = {}) {
   stop()
-  const cfg = await loadConfig()
-  if (!cfg.logUpload.enabled) return
+  // 日志上传是运维必备能力，恒开（不做界面开关）
   if (resetTerminal) {
     // 换密钥/换地址之后，此前因鉴权或通道被拒的日志该再试一次
     await initLedger()

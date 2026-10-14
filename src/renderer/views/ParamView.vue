@@ -21,18 +21,15 @@ async function openDevTools() {
 }
 
 async function uploadNow() {
-  // 以已保存的配置为准：界面上的勾选还没保存时，主进程用的仍是旧值
-  if (config.value?.logUpload?.enabled === false) {
-    uploadNote.value = { error: true, text: '日志上传已关闭，先勾选下面的开关并保存' }
-    return
-  }
   uploading.value = true
   uploadNote.value = null
   try {
     const res = await window.intake.uploadLogsNow()
-    if (res?.failed) {
-      uploadNote.value = { error: true, text: `有 ${res.failed} 个日志文件上传失败，原因见运行日志` }
-      ElMessage.error(`有 ${res.failed} 个日志文件上传失败，详情见运行日志`)
+    // 接口报错原文优先透传（如「系统异常」），多个文件去重后拼接
+    const msgs = [...new Set((res?.errors || []).map((e) => e.msg).filter(Boolean))]
+    if (msgs.length) {
+      uploadNote.value = { error: true, text: `上传失败：${msgs.join('；')}` }
+      ElMessage.error(`上传失败：${msgs.join('；')}`)
     } else if (res?.uploaded) {
       uploadNote.value = { text: `已成功上传 ${res.uploaded} 个日志文件` }
       ElMessage.success(`已成功上传 ${res.uploaded} 个日志文件`)
@@ -112,10 +109,6 @@ async function submit() {
       </div>
 
       <div class="flex flex-wrap items-center gap-3">
-        <label class="flex items-center gap-2 cursor-pointer select-none">
-          <input v-model="form.logUpload.enabled" type="checkbox" class="w-3.5 h-3.5 accent-[#2f6fed]" />
-          <span class="text-sm">把运行日志上传到通关宝平台</span>
-        </label>
         <button class="btn-ghost" :disabled="uploading" @click="uploadNow">{{ uploading ? '上传中…' : '立即上传日志' }}</button>
       </div>
       <div class="text-xs text-slate-500 leading-relaxed -mt-2">

@@ -7,7 +7,6 @@ import { execSync } from 'node:child_process'
 import { app } from 'electron'
 import { CAN_EDIT_SERVER } from './env.js'
 import { BUSINESS_TYPES, emptyBizDir } from '../shared/biz-types.js'
-import { LOG_LEVELS } from '../shared/log-levels.js'
 
 // 生产包地址写死在程序里，界面不可改；测试/开发未填地址时走测试兜底。
 export const PROD_API_URL = 'https://www.astongai.com'
@@ -28,13 +27,9 @@ const DEFAULTS = {
   batchSize: 5,
   tradeModes: ['export', 'import', '9610'],
   logKeepDays: 30,
-  // 写盘日志级别：debug 只进内存缓冲和界面实时列表，不落文件；现场排障时临时调到 debug
+  // 写盘日志级别：界面不再暴露，恒为 info；异常期由 log-upload.js 的智能调节临时升到 debug
   logLevel: 'info',
-  autoLaunch: true,
-  // 日志上传平台：每天上传已封口的历史日志，退出/装更新/上次异常退出时补传当天（见 log-upload.js）
-  logUpload: {
-    enabled: true
-  }
+  autoLaunch: true
 }
 
 let cache = null
@@ -160,7 +155,6 @@ function normalizeBizDirs(raw) {
 }
 
 function normalize(raw) {
-  const upload = raw.logUpload ?? {}
   const profiles = normalizeProfiles(raw)
   const activeProfile = CAN_EDIT_SERVER ? clampInt(raw.activeProfile, 0, profiles.length - 1, 0) : 0
   const active = profiles[activeProfile]
@@ -185,13 +179,10 @@ function normalize(raw) {
     batchSize: clampInt(raw.batchSize, 1, 20, DEFAULTS.batchSize),
     tradeModes: normalizeTradeModes(raw.tradeModes),
     logKeepDays: clampInt(raw.logKeepDays, 1, 3650, DEFAULTS.logKeepDays),
-    logLevel: LOG_LEVELS.includes(raw.logLevel) ? raw.logLevel : DEFAULTS.logLevel,
-    autoLaunch: raw.autoLaunch !== false,
-    // 旧版配置里的 remoteDir / pattern / intervalMinutes 已作废（改为直接调后端上传接口），
-    // 这里只取 enabled，其余字段在归一化时自然丢弃，不需要单独的迁移逻辑
-    logUpload: {
-      enabled: upload.enabled !== false
-    }
+    // 日志写盘级别恒为 info：界面不暴露；异常期由 log-upload.js 智能调节临时升到 debug。
+    // 旧配置里的 logLevel / logUpload 字段在此自然丢弃（上传恒开，无开关）
+    logLevel: DEFAULTS.logLevel,
+    autoLaunch: raw.autoLaunch !== false
   }
 }
 
@@ -246,7 +237,6 @@ export async function saveConfig(patch) {
     merged.bizDirs = nextBiz
   }
   if (patch.tradeModes) merged.tradeModes = normalizeTradeModes(patch.tradeModes)
-  if (patch.logUpload) merged.logUpload = { ...(cache?.logUpload ?? DEFAULTS.logUpload), ...patch.logUpload }
   cache = normalize(merged)
   await writeJsonAtomic(configFile(), cache)
   try {

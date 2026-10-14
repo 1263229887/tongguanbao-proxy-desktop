@@ -81,6 +81,28 @@ let heartbeatBusy = false
 let clockOffsetWarned = false
 let heartbeatTenantWarned = false
 
+// ---------- 与平台的连通性翻转记录（边沿触发，避免每 10 秒的轮询失败刷屏） ----------
+// 中断首次 → 异常日志（随恢复后的补传带到平台）；恢复首次 → 常规日志并给出中断时长。
+// 任意一次成功调用都证明连通，任意一次网络类失败都视为疑似中断；拉取/心跳共用同一状态。
+let netDownSince = null
+
+function noteNetDown(reason) {
+  if (netDownSince) return
+  netDownSince = Date.now()
+  warn(`[网络] 与平台连接中断：${reason}`, 'net')
+  // 断网期间上传必然失败，不触发即时上传；中断记录已写入本地日志，
+  // 恢复后由重试队列/次日封口自动补传带到平台
+  reportAnomaly('net-down', `与平台连接中断：${reason}，任务与日志将在恢复后自动补传`, { upload: false })
+  patch({ lastError: `与平台连接中断：${reason}` })
+}
+
+function noteNetUp() {
+  if (!netDownSince) return
+  const durMin = Math.round((Date.now() - netDownSince) / 60_000)
+  netDownSince = null
+  info(`[网络] 与平台连接已恢复，本次中断持续约 ${durMin} 分钟`, 'net')
+}
+
 function patch(values) {
   Object.assign(state, values)
   broadcast({ ...state })
@@ -421,11 +443,12 @@ async function tickTasks() {
         reportAnomaly('channel-closed', `前置机通道被平台关闭：${res.msg}，请联系平台处理`)
         return
       }
-      // 例行失败不逐条刷屏：从连通转为失败时告警一次
-      if (state.connected !== false) warn(`拉取任务失败：${res.msg}`, 'pull')
+      // 网络类失败只在「连通→中断」翻转时记一条（noteNetDown 内部去重）
+      noteNetDown(res.msg)
       return patch({ connected: false, lastError: res.msg })
     }
 
+    noteNetUp()
     patch({ connected: true, authFailed: false, channelClosed: false, lastError: null, tickCount: state.tickCount + 1 })
 
     detectPlatformMode(res.tasks || [])
@@ -444,6 +467,7 @@ async function tickTasks() {
     // 本轮拉取成功说明网络通畅，顺手补报此前未确认的任务
     if (state.enabled) await reconcileReports(cfg)
   } catch (e) {
+    noteNetDown(e.message)
     patch({ connected: false, lastError: e.message })
   } finally {
     taskBusy = false
@@ -819,6 +843,7 @@ async function tickHeartbeat() {
         return
       }
       patch({ lastError: res.msg, lastHeartbeatAt: Date.now() })
+      noteNetDown(res.msg)
       return
     }
 
@@ -841,6 +866,7 @@ async function tickHeartbeat() {
     // 崩溃摘要上报成功一次即清除：一直挂着会掩盖之后真正的业务异常，
     // 而且它已经随当天日志补传到了平台，后端要看细节去日志里看
     clearCrashNote()
+    noteNetUp()
     patch({
       connected: true,
       authFailed: false,
@@ -850,6 +876,7 @@ async function tickHeartbeat() {
     })
   } catch (e) {
     warn(`心跳异常：${e.message}`, 'heartbeat')
+    noteNetDown(e.message)
   } finally {
     heartbeatBusy = false
   }
