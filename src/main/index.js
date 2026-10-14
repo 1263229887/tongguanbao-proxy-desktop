@@ -3,9 +3,10 @@ import { app, BrowserWindow, nativeImage, session, globalShortcut } from 'electr
 import { write as writeAutoStart } from './autostart.js'
 import { loadConfig } from './config.js'
 import { broadcast, registerIpc } from './ipc.js'
-import { closeLogger, error, info, initLogger, log, subscribe } from './logger.js'
-import { closeLedger } from './ledger.js'
-import { start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
+import { closeLogger, error, info, initLogger, log, subscribe, warn } from './logger.js'
+import { closeLedger, initLedger } from './ledger.js'
+import { flushNow as flushLogs, start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
+import { beginShutdown, markCleanExit, markRunning, setupCrashGuard } from './crash-guard.js'
 import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
 import { createTray, destroyTray } from './tray.js'
 import { APP_ENV } from './env.js'
@@ -19,6 +20,10 @@ if (DEV_URL) app.commandLine.appendSwitch('disable-http-cache')
 const RENDERER_FILE = path.join(import.meta.dirname, '../../dist/renderer/index.html')
 const LOAD_TIMEOUT_MS = 15000
 const LOAD_RETRY_MS = 2000
+// 崩溃后补传日志的等待时间：给界面进程留出加载并完成初始化的余量
+const CRASH_FLUSH_DELAY_MS = 30000
+// 退出前补传日志的最长等待：超过就放弃上传直接退出，不能让用户点「退出」后卡住
+const QUIT_FLUSH_TIMEOUT_MS = 20000
 
 // 加载失败/超时的兜底页（data: URL，无脚本），主进程按 LOAD_RETRY_MS 自动重载真实页面
 const FALLBACK_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>通关宝 proxy</title>
@@ -41,15 +46,29 @@ let retryTimer = null
 let fallbackShown = false
 let loadFailCount = 0
 
-const DIAG_LEVEL = { warning: 'warn', error: 'error' }
+// 渲染进程的 console 只转发 error。warning 多是 axios/组件库的例行噪音；
+// 而且一次网络故障同一条错误会在渲染层和 backend.js 各出现一次，全量转发等于把日志放大一倍。
+// 相同文案 5 分钟内只落一条：断网期间 axios 会每隔几秒重试并重复报同一个错，不节流会撑爆当天日志。
+const DIAG_LEVEL = { error: 'error' }
+const DIAG_THROTTLE_MS = 5 * 60_000
+const diagLastAt = new Map()
 
 function attachDiagnostics(target) {
   const wc = target.webContents
   wc.on('console-message', (e) => {
-    const level = DIAG_LEVEL[e.level]
-    if (level) log(level, `${e.message} (${e.sourceId || ''}:${e.lineNumber ?? 0})`, 'renderer')
+    if (!DIAG_LEVEL[e.level]) return
+    const now = Date.now()
+    const last = diagLastAt.get(e.message) || 0
+    if (now - last < DIAG_THROTTLE_MS) return
+    if (diagLastAt.size > 200) diagLastAt.clear()
+    diagLastAt.set(e.message, now)
+    log(DIAG_LEVEL[e.level], `${e.message} (${e.sourceId || ''}:${e.lineNumber ?? 0})`, 'renderer')
   })
-  wc.on('render-process-gone', (_e, details) => error(`渲染进程异常退出 reason=${details.reason} code=${details.exitCode}`, 'renderer'))
+  wc.on('render-process-gone', (_e, details) => {
+    // 退出流程里 Electron 会主动 kill 渲染进程（reason=killed code=15），那不是崩溃
+    if (isQuitting || details.reason === 'clean-exit') return
+    error(`渲染进程异常退出 reason=${details.reason} code=${details.exitCode}`, 'renderer')
+  })
   wc.on('did-fail-load', (_e, code, desc, url) => error(`页面加载失败 ${code} ${desc} ${url}`, 'renderer'))
 }
 
@@ -152,6 +171,16 @@ function quitApp() {
   app.quit()
 }
 
+function withTimeout(promise, ms, reason) {
+  let timer = null
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(reason)), ms)
+    })
+  ]).finally(() => clearTimeout(timer))
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1120,
@@ -224,7 +253,12 @@ async function bootstrap() {
   }
 
   const cfg = await loadConfig()
-  const logDir = initLogger({ days: cfg.logKeepDays })
+  const logDir = initLogger({ days: cfg.logKeepDays, level: cfg.logLevel })
+  setupCrashGuard()
+  // 上次是崩溃/断电退出时，立刻把当天日志补传上去，后端才拿得到崩溃前后的现场记录。
+  // 所有 HTTP 都经渲染进程发出，界面还没加载完就发必然失败，所以等窗口起来再触发；
+  // 真没传成也会进 1/5/15 分钟的重试队列，不会丢
+  if (markRunning()) setTimeout(() => void flushLogs(), CRASH_FLUSH_DELAY_MS)
 
   setupNetworkRelax()
 
@@ -234,12 +268,16 @@ async function bootstrap() {
 
   registerIpc({
     onConfigSaved: async (next) => {
-      initLogger({ days: next.logKeepDays })
+      initLogger({ days: next.logKeepDays, level: next.logLevel })
       writeAutoStart(next.autoLaunch)
       await resumePoller()
-      await startLogUpload()
+      // 换密钥/换地址后，此前被平台拒收的日志重新尝试一次
+      await startLogUpload({ resetTerminal: true })
     }
   })
+
+  // 账本要在代理启动前就打开：日志上传靠它判断哪些文件已经传过，而代理默认不自启
+  await initLedger()
 
   setupJumpList()
   createWindow()
@@ -248,7 +286,6 @@ async function bootstrap() {
   setupUpdater()
 
   info(`${app.name} ${app.getVersion()} 启动，env=${APP_ENV}，日志目录 ${logDir}`, 'app')
-  info(`企业鉴权密钥已本地缓存于 userData/config.json（升级重装不丢）`, 'app')
   if (app.isPackaged) writeAutoStart(cfg.autoLaunch)
   // 代理默认不自启，需用户在首页点「启动」
   await startLogUpload()
@@ -277,13 +314,35 @@ if (!app.requestSingleInstanceLock()) {
     if (!BrowserWindow.getAllWindows().length) createWindow()
   })
 
-  app.on('before-quit', () => {
-    isQuitting = true
-    stopPoller()
-    stopLogUpload()
+  function teardown() {
     stopUpdater()
     closeLedger()
     destroyTray()
     closeLogger()
+  }
+
+  /**
+   * 退出收尾：先把当天日志补传一次再退出。
+   * before-quit 是同步事件、等不了异步上传，所以第一次进来 preventDefault，
+   * 传完（或超时）后清掉运行标记并重新 app.quit()；第二次进来直接放行。
+   * 运行标记必须在这里删：留着的话下次启动会误判成崩溃。
+   */
+  let quitSettled = false
+  app.on('before-quit', (e) => {
+    isQuitting = true
+    // 先打标记：紧接着 Electron 就会开始 kill 子进程，那些 gone 事件不能被记成崩溃
+    beginShutdown()
+    if (quitSettled) return
+    quitSettled = true
+    e.preventDefault()
+    stopPoller()
+    stopLogUpload()
+    withTimeout(flushLogs(), QUIT_FLUSH_TIMEOUT_MS, '退出前上传日志超时')
+      .catch((err) => warn(`退出前上传日志未完成：${err.message}`, 'upload'))
+      .finally(() => {
+        markCleanExit()
+        teardown()
+        app.quit()
+      })
   })
 }

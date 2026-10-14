@@ -7,6 +7,7 @@ import { execSync } from 'node:child_process'
 import { app } from 'electron'
 import { CAN_EDIT_SERVER } from './env.js'
 import { BUSINESS_TYPES, emptyBizDir } from '../shared/biz-types.js'
+import { LOG_LEVELS } from '../shared/log-levels.js'
 
 // 生产包地址写死在程序里，界面不可改；测试/开发未填地址时走测试兜底。
 export const PROD_API_URL = 'https://www.astongai.com'
@@ -27,12 +28,12 @@ const DEFAULTS = {
   batchSize: 5,
   tradeModes: ['export', 'import', '9610'],
   logKeepDays: 30,
+  // 写盘日志级别：debug 只进内存缓冲和界面实时列表，不落文件；现场排障时临时调到 debug
+  logLevel: 'info',
   autoLaunch: true,
+  // 日志上传平台：每天上传已封口的历史日志，退出/装更新/上次异常退出时补传当天（见 log-upload.js）
   logUpload: {
-    enabled: true,
-    intervalMinutes: 10,
-    pattern: '*.log',
-    remoteDir: ''
+    enabled: true
   }
 }
 
@@ -184,12 +185,12 @@ function normalize(raw) {
     batchSize: clampInt(raw.batchSize, 1, 20, DEFAULTS.batchSize),
     tradeModes: normalizeTradeModes(raw.tradeModes),
     logKeepDays: clampInt(raw.logKeepDays, 1, 3650, DEFAULTS.logKeepDays),
+    logLevel: LOG_LEVELS.includes(raw.logLevel) ? raw.logLevel : DEFAULTS.logLevel,
     autoLaunch: raw.autoLaunch !== false,
+    // 旧版配置里的 remoteDir / pattern / intervalMinutes 已作废（改为直接调后端上传接口），
+    // 这里只取 enabled，其余字段在归一化时自然丢弃，不需要单独的迁移逻辑
     logUpload: {
-      enabled: upload.enabled !== false,
-      intervalMinutes: clampInt(upload.intervalMinutes, 1, 1440, DEFAULTS.logUpload.intervalMinutes),
-      pattern: str(upload.pattern) || DEFAULTS.logUpload.pattern,
-      remoteDir: str(upload.remoteDir)
+      enabled: upload.enabled !== false
     }
   }
 }

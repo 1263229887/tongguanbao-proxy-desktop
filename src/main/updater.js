@@ -5,6 +5,7 @@
 import { app } from 'electron'
 import { getAgentState, stopAgent, waitIdle } from './agent.js'
 import { APP_ENV } from './env.js'
+import { flushNow as flushLogs, suppressNextExitFlush } from './log-upload.js'
 import { debug, error, info, warn } from './logger.js'
 import { feedUrlFor } from './update-config.js'
 
@@ -184,6 +185,14 @@ export async function quitAndInstall() {
   } catch (e) {
     warn(`安装前收尾代理任务异常：${e?.message ?? e}`, 'update')
   }
+  // 新版本往往就是来修某个问题的，后端最需要看的正是升级前这段日志，所以安装前把当天日志补传上去。
+  // 装完 before-quit 还会再收尾一次，但那时安装器已经拉起、不能再等上传，用开关让它跳过
+  try {
+    await flushLogs()
+  } catch (e) {
+    warn(`安装前上传日志异常：${e?.message ?? e}`, 'update')
+  }
+  suppressNextExitFlush()
   info('代理任务已收尾，退出并安装新版本', 'update')
   // 延后一拍让 IPC 先返回；静默安装 + 装完自动拉起新版本
   setTimeout(() => {

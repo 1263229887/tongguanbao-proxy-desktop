@@ -9,6 +9,7 @@ import { debug, warn } from './logger.js'
 //   平台模式额外落 tenantId/tradeMode（tenantId 仅用于账本、审计和排障，不参与目录选择）
 // - receipts 以 xmlSha256 唯一，只记录本代理自己投递任务所产生回执的处理状态
 //   （ACKED_MATCHED / ACKED_UNMATCHED / RETRY_PENDING / PERMANENT_REJECTED / LOCAL_UNMATCHED）
+// - log_uploads 以日志文件名唯一，记录本地日志上传平台的结果与重试进度（见 log-upload.js）
 // 库中数据全部来自本代理运行时的实际处理，不导入任何历史文件；进程重启后从库恢复。
 
 let db = null
@@ -48,11 +49,18 @@ const RECEIPT_COLS = [
   'firstSeenAt'
 ]
 
+const LOG_UPLOAD_COLS = ['size', 'state', 'retryCount', 'nextRetryAt', 'lastAttemptAt', 'remoteId', 'remotePath', 'message', 'firstSeenAt']
+
 function ledgerFile() {
   return path.join(app.getPath('userData'), 'data', 'delivery-ledger.db')
 }
 
+/**
+ * 幂等初始化：日志上传要在代理未启动时也跑（bootstrap 阶段就要补传断网期间积压的日志），
+ * 而账本原先只在 startAgent 里建。已打开时直接复用同一个连接，避免同库多连接。
+ */
 export async function initLedger() {
+  if (db) return file
   file = ledgerFile()
   await fs.mkdir(path.dirname(file), { recursive: true })
   db = new DatabaseSync(file)
@@ -94,6 +102,19 @@ export async function initLedger() {
       retryCount INTEGER NOT NULL DEFAULT 0,
       nextRetryAt INTEGER,
       lastAttemptAt INTEGER,
+      message TEXT,
+      firstSeenAt INTEGER,
+      updatedAt INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS log_uploads (
+      fileName TEXT PRIMARY KEY,
+      size INTEGER,
+      state TEXT NOT NULL,
+      retryCount INTEGER NOT NULL DEFAULT 0,
+      nextRetryAt INTEGER,
+      lastAttemptAt INTEGER,
+      remoteId INTEGER,
+      remotePath TEXT,
       message TEXT,
       firstSeenAt INTEGER,
       updatedAt INTEGER NOT NULL
@@ -272,6 +293,42 @@ export function deliveredFileStems(moduleCode) {
     .prepare("SELECT fileName FROM tasks WHERE status = 'DELIVERED' AND fileName IS NOT NULL AND businessModuleCode = ?")
     .all(moduleCode)
     .map((r) => String(r.fileName).replace(/\.xml$/i, ''))
+}
+
+/**
+ * 日志上传账本（对接《前置机日志文件上传对接文档》§5：失败重试 + 断网离线补传）。
+ * 以日志文件名为唯一键：同一天的文件只上传一次，进程重启后按库中状态续做，不重传也不漏传。
+ */
+export function getLogUpload(fileName) {
+  return db.prepare('SELECT * FROM log_uploads WHERE fileName = ?').get(fileName) || null
+}
+
+export function upsertLogUpload(record) {
+  const cols = []
+  const vals = []
+  for (const c of LOG_UPLOAD_COLS) {
+    if (record[c] === undefined) continue
+    cols.push(c)
+    vals.push(record[c])
+  }
+  const placeholders = cols.map(() => '?').join(', ')
+  const updates = cols.map((c) => `${c} = excluded.${c}`).join(', ')
+  db.prepare(
+    `INSERT INTO log_uploads (fileName, ${cols.join(', ')}, updatedAt)
+     VALUES (?, ${placeholders}, ?)
+     ON CONFLICT(fileName) DO UPDATE SET ${updates}, updatedAt = excluded.updatedAt`
+  ).run(record.fileName, ...vals, Date.now())
+  return getLogUpload(record.fileName)
+}
+
+/**
+ * 把 BLOCKED（服务端未开通道 / 鉴权失败）的记录退回 PENDING，返回条数。
+ * 这类终态是外部原因造成的，换密钥或改地址之后就该再试一次；
+ * FAILED 是内容问题或重试已耗尽，不在这里复活，避免每次启动都重打一遍必然失败的请求。
+ */
+export function resetTerminalLogUploads() {
+  return db.prepare("UPDATE log_uploads SET state = 'PENDING', retryCount = 0, nextRetryAt = NULL, updatedAt = ? WHERE state = 'BLOCKED'").run(Date.now())
+    .changes
 }
 
 export function getLedgerPath() {

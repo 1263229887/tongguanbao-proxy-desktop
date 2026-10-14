@@ -28,6 +28,8 @@ import {
   upsertTask
 } from './ledger.js'
 import { debug, error, info, warn } from './logger.js'
+import { clearCrashNote, getCrashNote } from './crash-guard.js'
+import { getUploadError } from './log-upload.js'
 
 // 真实代理引擎（文档 v1.4）：拉取 DECCUS001 → 原子写 OutBox → 回报状态 → 轮询 InBox 上传回执 → 心跳。
 // clientSeqNo 为申报轮次标识：同 taskId 新轮次正常投递，账本按 taskId+clientSeqNo+xmlSha256 三段键记录。
@@ -75,7 +77,6 @@ let heartbeatTimer = null
 let taskBusy = false
 let inboxBusy = false
 let heartbeatBusy = false
-let ledgerReady = false
 let clockOffsetWarned = false
 let heartbeatTenantWarned = false
 
@@ -427,7 +428,9 @@ async function tickTasks() {
 
     for (const task of res.tasks || []) {
       if (!state.enabled) break
-      info(
+      // debug：本轮条数已由 backend.pullTasks 汇总记录，逐条投递结果由「已写入 OutBox」承载，
+      // 这里再记一条 info 等于每个任务两行，任务量上来就把当天日志刷满
+      debug(
         `领取任务入队 taskId=${task.taskId}${task.tenantId != null ? ` tenant=${task.tenantId}` : ''} sha=${String(task.xmlSha256 || '').slice(0, 12)} file=${task.fileName}`,
         'pull'
       )
@@ -493,6 +496,15 @@ async function fileSha(file) {
 function backoffMs(retryCount) {
   const base = Math.min(60_000, 1_000 * 2 ** Math.max(0, retryCount))
   return Math.round(base * (1 + Math.random() * 0.2))
+}
+
+/**
+ * 心跳 lastError 的取值：业务异常 > 上次崩溃/异常退出 > 日志上传连续失败。
+ * 三者都要让后端在「前置机监控告警」里看见，但字段只有一条，按谁更需要人工介入排序。
+ * 崩溃与日志上传的异常不在 state 里，所以这里现取。
+ */
+function heartbeatLastError() {
+  return state.lastError || getCrashNote() || getUploadError() || ''
 }
 
 /**
@@ -583,7 +595,8 @@ async function processInboxFile(cfg, file) {
   }
 
   const receivedAt = formatDateTime(new Date(file.mtime))
-  info(
+  // debug：成功由「回执已确认」记一条，失败由各分支的 warn 记一条，这里再记 info 会成对重复
+  debug(
     `上传回执 ${file.name} size=${buf.length} retry=${common.retryCount}${platformTask ? ` taskId=${platformTask.taskId}` : ''}`,
     'receipt'
   )
@@ -745,7 +758,7 @@ async function tickHeartbeat() {
       outboxOk,
       inboxOk,
       pendingTaskCount: pendingTaskCount(),
-      lastError: state.lastError || ''
+      lastError: heartbeatLastError()
     })
 
     if (!res.ok) {
@@ -787,6 +800,9 @@ async function tickHeartbeat() {
       }
     }
     heartbeatTenantWarned = false
+    // 崩溃摘要上报成功一次即清除：一直挂着会掩盖之后真正的业务异常，
+    // 而且它已经随当天日志补传到了平台，后端要看细节去日志里看
+    clearCrashNote()
     patch({
       connected: true,
       authFailed: false,
@@ -819,11 +835,9 @@ export async function startAgent() {
     return patch({ enabled: false, running: false, lastError: '请先配置货物申报的 OutBox / InBox 目录' })
   }
 
-  if (!ledgerReady) {
-    const file = await initLedger()
-    info(`投递账本：${file}`, 'agent')
-    ledgerReady = true
-  }
+  // initLedger 幂等：日志上传可能已在 bootstrap 阶段打开账本，这里直接复用同一个连接
+  const file = await initLedger()
+  debug(`投递账本：${file}`, 'ledger')
 
   clearTimers()
   state.enabled = true
@@ -872,10 +886,7 @@ export async function resumeAgent() {
 
 export async function runAgentOnce() {
   state.enabled = true
-  if (!ledgerReady) {
-    await initLedger()
-    ledgerReady = true
-  }
+  await initLedger()
   await tickTasks()
   await tickInbox()
   await tickHeartbeat()

@@ -18,7 +18,7 @@ export function isRendererReady() {
   return !!(win && !win.webContents.isLoading() && !win.webContents.isDestroyed())
 }
 
-export function requestViaRenderer({ url, method = 'POST', headers = {}, body, timeoutMs = TIMEOUT_MS }) {
+export function requestViaRenderer({ url, method = 'POST', headers = {}, body, multipart, timeoutMs = TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     const win = targetWindow()
     if (!win || win.webContents.isDestroyed()) {
@@ -48,6 +48,9 @@ export function requestViaRenderer({ url, method = 'POST', headers = {}, body, t
       method,
       headers,
       body: body === undefined ? null : body,
+      // 文件上传：{ fields, file:{ field, name, contentType, bytes } }。
+      // bytes 是 Uint8Array，结构化克隆能过 IPC；FormData/Blob 不能，只能在渲染层现组
+      multipart: multipart ?? null,
       timeoutMs
     }
     win.webContents.send('net:do-request', payload)

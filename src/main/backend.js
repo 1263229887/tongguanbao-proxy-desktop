@@ -1,10 +1,12 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
+import dayjs from 'dayjs'
 import { effectiveApiUrl } from './config.js'
 import { requestViaRenderer } from './net-bridge.js'
 import { info, warn } from './logger.js'
 
-// 关务前置机四个接口。请求全部经渲染进程发出，便于 DevTools Network 排查。
+// 关务前置机接口：拉取任务 / 状态回报 / 回执上传 / 心跳 / 日志上传。
+// 请求全部经渲染进程发出，便于 DevTools Network 排查。
 // 日志纪律（文档 §13）：不记录完整密钥、XML、Base64、请求头/响应体；
 // 例行成功的请求不逐条落日志，业务状态与异常在调用方记录。
 
@@ -19,7 +21,13 @@ export const BIZ_CODE = {
   RECEIPT_TOO_LARGE: 1050000205,
   // 以下两个仅平台跨租户模式会出现（跨租户文档 §12）
   HEARTBEAT_TENANT_UNSET: 1050000208, // 后端未配置平台 heartbeat 归属租户
-  RECEIPT_TASK_MISMATCH: 1050000209 // 回执 taskId 与 ClientSeqNo 不匹配
+  RECEIPT_TASK_MISMATCH: 1050000209, // 回执 taskId 与 ClientSeqNo 不匹配
+  // 日志上传（《前置机日志文件上传对接文档》§4）
+  LOG_CHANNEL_CLOSED: 1050000231, // 服务端未开启日志上传通道，整体拒绝
+  LOG_FILE_EMPTY: 1050000232,
+  LOG_FILE_TOO_LARGE: 1050000233,
+  LOG_FILE_TYPE_NOT_ALLOWED: 1050000234,
+  LOG_INSTANCE_NAME_REQUIRED: 1050000235
 }
 
 export function maskKey(key) {
@@ -29,10 +37,15 @@ export function maskKey(key) {
   return `…${s.slice(-4)}`
 }
 
+/** 只带鉴权头。multipart 请求必须用它：Content-Type 要留给渲染层的 FormData 生成 boundary */
+export function agentKeyHeaders(cfg) {
+  return { 'X-Agent-Key': cfg.agentKey }
+}
+
 export function authHeaders(cfg) {
   return {
     'Content-Type': 'application/json',
-    'X-Agent-Key': cfg.agentKey
+    ...agentKeyHeaders(cfg)
   }
 }
 
@@ -50,16 +63,20 @@ function buildUrl(cfg, apiPath) {
   return new URL(full, `${base}/`).toString()
 }
 
-/** 把后端公共包封成统一结果，避免各处重复判断 HTTP/code */
-async function post(cfg, apiPath, body, { timeoutMs, scope = 'api', label = apiPath } = {}) {
+/**
+ * 统一发送 + 信封解包。JSON 与 multipart 走同一条路，差别只在请求体形态与请求头。
+ * 把后端公共包封成统一结果，避免各处重复判断 HTTP/code。
+ */
+async function send(cfg, apiPath, { body, multipart, headers, timeoutMs }, { scope = 'api', label = apiPath } = {}) {
   const url = buildUrl(cfg, apiPath)
   const started = Date.now()
   try {
     const res = await requestViaRenderer({
       url,
       method: 'POST',
-      headers: authHeaders(cfg),
+      headers,
       body,
+      multipart,
       timeoutMs
     })
     const cost = Date.now() - started
@@ -101,9 +118,13 @@ async function post(cfg, apiPath, body, { timeoutMs, scope = 'api', label = apiP
   }
 }
 
+async function post(cfg, apiPath, body, { timeoutMs, scope, label } = {}) {
+  return send(cfg, apiPath, { body, headers: authHeaders(cfg), timeoutMs }, { scope, label })
+}
+
+/** 后端接口约定的时间格式 yyyy-MM-dd HH:mm:ss：回执的 receivedAt、日志上传的 logTime 都用它 */
 export function formatDateTime(d = new Date()) {
-  const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  return dayjs(d).format('YYYY-MM-DD HH:mm:ss')
 }
 
 function epochToMs(n) {
@@ -182,8 +203,33 @@ export async function sendHeartbeat(cfg, payload) {
   return res
 }
 
-/** 测试访问：直接打一次心跳，密钥/地址/网络一把验证 */
-export async function testConnection(cfg) {
+/**
+ * 上传本地日志文件（《前置机日志文件上传对接文档》§3）。
+ * instanceName 直接取配置里那份——它在首次运行时冻结进 config.json，与心跳上送的是同一个值，
+ * 后端靠它把日志关联到具体实例，两处不一致排查时就对不上号。
+ * bytes 由调用方压缩好（服务端白名单 .log/.txt/.gz/.zip，压缩后省带宽也省服务器磁盘）。
+ */
+export async function uploadLogFile(cfg, { fileName, bytes, logTime }) {
+  const fields = { instanceName: cfg.instanceName }
+  // logTime 缺省时后端用接收时间；日志是补传的，必须带上文件自己的产生时间才排得进时间线
+  if (logTime) fields.logTime = logTime
+  return send(
+    cfg,
+    '/log/upload',
+    {
+      multipart: {
+        fields,
+        file: { field: 'file', name: fileName, contentType: 'application/gzip', bytes }
+      },
+      headers: agentKeyHeaders(cfg),
+      // 压缩包可能几十 MB，走默认 20s 不够
+      timeoutMs: 180_000
+    },
+    { scope: 'upload', label: `log:${fileName}` }
+  )
+}
+
+/** 测试访问：直接打一次心跳，密钥/地址/网络一把验证 */export async function testConnection(cfg) {
   const miss = missingAccess(cfg)
   if (miss.length) {
     warn(`权限配置不完整，缺少：${miss.join('、')}`, 'access')
