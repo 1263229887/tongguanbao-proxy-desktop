@@ -19,9 +19,10 @@ import { feedUrlFor } from './update-config.js'
 import electronUpdaterPkg from 'electron-updater'
 const { autoUpdater } = electronUpdaterPkg
 
-// 启动后延迟首查，避开开机网络未就绪的窗口；之后每 6 小时静默检查一次
-const STARTUP_CHECK_DELAY_MS = 30_000
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+// 启动后 10 秒首查（有新包时开机半分钟内即可提示）；之后每 30 分钟静默检查一次，
+// 保证运行中的客户端在新包发布后半小时内被提示到（此前 6 小时的间隔太稀，发版后要等很久）
+const STARTUP_CHECK_DELAY_MS = 10_000
+const CHECK_INTERVAL_MS = 30 * 60_000
 // 安装前等在途任务收尾的上限：单个 HTTP 调用超时 20s，超时未收尾则按账本保证的原子性继续安装
 const IDLE_WAIT_MS = 30_000
 
@@ -209,8 +210,11 @@ export function setupUpdater() {
   })
 
   checkTimer = setTimeout(() => {
-    checkForUpdates(false)
-    checkTimer = setInterval(() => checkForUpdates(false), CHECK_INTERVAL_MS)
+    void checkForUpdates(false).then((r) => {
+      // 启动首查失败（开机网络未就绪等）：一分钟后补查一次，避免首日错过新版本提示
+      if (!r.ok) setTimeout(() => void checkForUpdates(false), 60_000)
+    })
+    checkTimer = setInterval(() => void checkForUpdates(false), CHECK_INTERVAL_MS)
   }, STARTUP_CHECK_DELAY_MS)
 
   info(`在线更新已启用`, 'update')

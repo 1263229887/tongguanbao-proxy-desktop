@@ -86,6 +86,10 @@ export async function initStore() {
   window.intake.onLogEntry((entry) => {
     logs.value = [...logs.value, entry].slice(-500)
   })
+
+  // 界面加载完即静默检查一次：覆盖「程序刚启动」与「刷新/重开界面（Ctrl+R）」两个时机，
+  // 让新版本提示及时出现；主进程侧另有 10 秒首查 + 30 分钟周期检查兜底（见 updater.js）
+  void window.intake.checkUpdate()
 }
 
 export async function saveConfig(patch) {

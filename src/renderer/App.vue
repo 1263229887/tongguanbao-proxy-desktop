@@ -26,25 +26,33 @@ const statusTone = {
 
 // 发现新版本 / 下载完成时主动弹提醒（右上角，点击直达关于页）。
 // 只是提示：不自动下载、不自动安装，是否更新完全由用户在关于页决定。
+// 同一「状态+版本」只弹一次，界面刷新后状态重载会再弹——正是「刚打开界面就要有提示」的效果
+let lastToastedKey = null
 watch(
   () => updateState.value.status,
   (st, old) => {
     if (st === old) return
-    if (st === 'updateAvailable') {
-      ElNotification({
-        title: '发现新版本',
-        message: `v${updateState.value.version ?? '—'} 已发布，可前往「关于」页下载安装`,
-        duration: 12000,
-        onClick: () => go('about')
-      })
-    } else if (st === 'downloaded') {
-      ElNotification({
-        title: '新版本已就绪',
-        message: `v${updateState.value.version ?? '—'} 下载完成，可前往「关于」页重启安装`,
-        type: 'success',
-        duration: 12000,
-        onClick: () => go('about')
-      })
+    if (st === 'updateAvailable' || st === 'downloaded') {
+      const s = updateState.value
+      const key = `${st}:${s.version ?? ''}`
+      if (lastToastedKey === key) return
+      lastToastedKey = key
+      if (st === 'updateAvailable') {
+        ElNotification({
+          title: '发现新版本',
+          message: `v${s.version ?? '—'} 已发布，可前往「关于」页下载安装`,
+          duration: 12000,
+          onClick: () => go('about')
+        })
+      } else {
+        ElNotification({
+          title: '新版本已就绪',
+          message: `v${s.version ?? '—'} 下载完成，可前往「关于」页重启安装`,
+          type: 'success',
+          duration: 12000,
+          onClick: () => go('about')
+        })
+      }
     }
   }
 )
