@@ -5,7 +5,7 @@ import { loadConfig } from './config.js'
 import { broadcast, registerIpc } from './ipc.js'
 import { closeLogger, error, info, initLogger, log, subscribe, warn } from './logger.js'
 import { closeLedger, initLedger } from './ledger.js'
-import { flushNow as flushLogs, start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
+import { flushNow as flushLogs, reportAnomaly, start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
 import { beginShutdown, markCleanExit, markRunning, setupCrashGuard } from './crash-guard.js'
 import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
 import { createTray, destroyTray } from './tray.js'
@@ -68,6 +68,10 @@ function attachDiagnostics(target) {
     // 退出流程里 Electron 会主动 kill 渲染进程（reason=killed code=15），那不是崩溃
     if (isQuitting || details.reason === 'clean-exit') return
     error(`渲染进程异常退出 reason=${details.reason} code=${details.exitCode}`, 'renderer')
+    // 崩溃属需要立即让平台知道的异常：写日志并自动补传当天日志（reportAnomaly 内部带节流）
+    reportAnomaly('renderer-crash', `程序界面异常退出（reason=${details.reason}），将自动恢复，请关注现场是否反复出现`, {
+      minIntervalMs: 5 * 60_000
+    })
   })
   wc.on('did-fail-load', (_e, code, desc, url) => error(`页面加载失败 ${code} ${desc} ${url}`, 'renderer'))
 }

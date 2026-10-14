@@ -283,6 +283,24 @@ export function unreportedTasks() {
 }
 
 /**
+ * 已投递超过 olderThanMs 且账本里查不到任何对应回执的任务（回执缺失检测用）。
+ * 回执文件名 = 前缀 + 所投递文件名主干 + 流水号，因此按主干 LIKE 匹配 receipts.fileName。
+ * 调用方还需结合 InBox 目录现状过滤：回执文件已落盘但尚未处理的不算异常。
+ */
+export function deliveredWithoutReceipt(moduleCode, olderThanMs) {
+  return db
+    .prepare(
+      `SELECT t.taskId, t.fileName, t.firstAt FROM tasks t
+       WHERE t.status = 'DELIVERED' AND t.businessModuleCode = ? AND t.fileName IS NOT NULL
+         AND COALESCE(t.firstAt, 0) <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM receipts r WHERE r.fileName LIKE '%' || replace(t.fileName, '.xml', '') || '%'
+         )`
+    )
+    .all(moduleCode, Date.now() - olderThanMs)
+}
+
+/**
  * 指定业务模块下已投递（DELIVERED）任务的文件名主干（去掉 .xml 扩展名）。
  * 单一窗口回执文件名 = 前缀 + 所投递文件名主干 + 回执流水号，
  * 据此识别 InBox 中属于本模块任务的回执；其他模块/系统的历史文件不处理、不入库。

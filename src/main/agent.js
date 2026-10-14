@@ -29,7 +29,8 @@ import {
 } from './ledger.js'
 import { debug, error, info, warn } from './logger.js'
 import { clearCrashNote, getCrashNote } from './crash-guard.js'
-import { getUploadError } from './log-upload.js'
+import { getUploadError, reportAnomaly } from './log-upload.js'
+import { deliveredWithoutReceipt } from './ledger.js'
 
 // 真实代理引擎（文档 v1.4）：拉取 DECCUS001 → 原子写 OutBox → 回报状态 → 轮询 InBox 上传回执 → 心跳。
 // clientSeqNo 为申报轮次标识：同 taskId 新轮次正常投递，账本按 taskId+clientSeqNo+xmlSha256 三段键记录。
@@ -159,6 +160,7 @@ async function deliverTask(cfg, task) {
     await ensureWritableDir(dirs.outBox, 'OutBox')
   } catch (e) {
     warn(`OutBox 不可写：${e.message}`, 'deliver')
+    reportAnomaly('outbox-unwritable', `统一 OutBox 目录不可写，任务无法投递到单一窗口：${e.message}，请检查目录配置与磁盘/权限`)
     await reportTaskStatus(cfg, taskId, {
       dispatchToken,
       status: 'FAILED',
@@ -410,11 +412,13 @@ async function tickTasks() {
       if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {
         patch({ authFailed: true, connected: false, lastError: res.msg })
         warn(`企业鉴权密钥无效：${res.msg}`, 'pull')
+        reportAnomaly('auth-failed', `企业鉴权密钥无效，已暂停拉取任务：${res.msg}，请在「权限配置」核对密钥`)
         return
       }
       if (res.code === BIZ_CODE.CHANNEL_CLOSED || res.httpStatus === 503) {
         patch({ channelClosed: true, connected: false, lastError: res.msg })
         warn(`前置机通道关闭：${res.msg}`, 'pull')
+        reportAnomaly('channel-closed', `前置机通道被平台关闭：${res.msg}，请联系平台处理`)
         return
       }
       // 例行失败不逐条刷屏：从连通转为失败时告警一次
@@ -449,6 +453,36 @@ async function tickTasks() {
 
 /** 两次扫描文件大小与 mtime 均不变，才视为写入完成 */
 const inboxStable = new Map()
+
+// ---------- 回执缺失检测 ----------
+// 有任务投递成功、但 InBox 里迟迟见不到对应回执 → 大概率是单一窗口导入客户端没跑起来、
+// 「接收回执」没启动或回执目录配错。这类故障用户不点开目录根本发现不了，
+// 必须自动上报（写日志并立即补传当天日志），而不是等定时/手动上传。
+const RECEIPT_GRACE_MS = 30 * 60_000 // 投递后容忍多久没回执（单一窗口回执通常分钟级）
+const RECEIPT_CHECK_INTERVAL_MS = 5 * 60_000 // 检测节奏：tickInbox 每 3 秒一轮，这里节流到 5 分钟
+let lastReceiptCheckAt = 0
+
+function checkReceiptsMissing(inboxFiles) {
+  if (Date.now() - lastReceiptCheckAt < RECEIPT_CHECK_INTERVAL_MS) return
+  lastReceiptCheckAt = Date.now()
+  try {
+    const pending = deliveredWithoutReceipt(BIZ.moduleCode, RECEIPT_GRACE_MS)
+    if (!pending.length) return
+    // InBox 里已出现同名主干文件 = 回执已到、只是还在排队处理，不算异常
+    const inboxText = inboxFiles.map((f) => f.name.replace(/\.xml$/i, '')).join('\n')
+    const stuck = pending.filter((r) => !inboxText.includes(String(r.fileName).replace(/\.xml$/i, '')))
+    if (!stuck.length) return
+    const oldestMin = Math.round((Date.now() - Math.min(...stuck.map((r) => r.firstAt || Date.now()))) / 60_000)
+    reportAnomaly(
+      'receipt-missing',
+      `单一窗口回执疑似异常：${stuck.length} 个任务已投递超过 ${Math.round(RECEIPT_GRACE_MS / 60_000)} 分钟仍未收到回执（最早 ${oldestMin} 分钟前投递）。请检查中国国际贸易单一窗口导入客户端是否运行、「接收回执」是否启动、InBox 回执目录配置是否与单一窗口一致`,
+      { minIntervalMs: 30 * 60_000 }
+    )
+    patch({ lastError: '已投递任务长时间未收到单一窗口回执，请检查单一窗口导入客户端' })
+  } catch (e) {
+    debug(`回执缺失检测异常：${e.message}`, 'receipt')
+  }
+}
 
 function inboxEntryKey(full) {
   return full
@@ -625,6 +659,7 @@ async function processInboxFile(cfg, file) {
     }
     if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {
       patch({ authFailed: true, lastError: res.msg })
+      reportAnomaly('auth-failed', `上传回执时鉴权失败，已暂停：${res.msg}，请在「权限配置」核对密钥`)
       return
     }
     // 网络异常、响应未知或可重试的服务端错误：RETRY_PENDING + 指数退避，文件始终留在 InBox。
@@ -682,6 +717,7 @@ async function tickInbox() {
     // 只处理文件名能对上某个本代理 DELIVERED 任务主干的回执；
     // 其他系统/历史文件不读、不传、不入库（PREPARED 未落地的任务不会产生回执，不参与匹配）
     const stems = deliveredFileStems(BIZ.moduleCode)
+    checkReceiptsMissing(files)
     const now = Date.now()
     const ready = []
     for (const f of files) {
@@ -764,10 +800,12 @@ async function tickHeartbeat() {
     if (!res.ok) {
       if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {
         patch({ authFailed: true, connected: false, lastError: res.msg, lastHeartbeatAt: Date.now() })
+        reportAnomaly('auth-failed', `心跳上报鉴权失败：${res.msg}，请在「权限配置」核对密钥`)
         return
       }
       if (res.code === BIZ_CODE.CHANNEL_CLOSED || res.httpStatus === 503) {
         patch({ channelClosed: true, connected: false, lastError: res.msg, lastHeartbeatAt: Date.now() })
+        reportAnomaly('channel-closed', `心跳上报通道被平台关闭：${res.msg}，请联系平台处理`)
         return
       }
       if (res.code === BIZ_CODE.HEARTBEAT_TENANT_UNSET) {

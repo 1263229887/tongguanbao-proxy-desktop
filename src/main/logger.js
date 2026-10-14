@@ -69,6 +69,15 @@ export function initLogger({ days, level } = {}) {
   return logDir
 }
 
+/** 运行时调写盘级别：异常期临时提到 debug 保留现场细节，窗口过后恢复（不落盘、重启还原为 info） */
+export function setFileLevel(level) {
+  if (RANK[level] !== undefined) fileLevel = level
+}
+
+export function getFileLevel() {
+  return fileLevel
+}
+
 export function getLogDir() {
   return logDir
 }

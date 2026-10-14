@@ -6,7 +6,7 @@ import { getAgentState, runAgentOnce, startAgent, stopAgent } from './agent.js'
 import { setupNetBridge } from './net-bridge.js'
 import { APP_ENV } from './env.js'
 import { checkDir, loadConfig, saveConfig } from './config.js'
-import { flushNow as flushLogUpload } from './log-upload.js'
+import { flushNow as flushLogUpload, run as runLogUpload } from './log-upload.js'
 import { clearLogs, getLogDir, getLogs, listLogFiles, readLogFile } from './logger.js'
 import { getState, runNow, start as startPoller, stop as stopPoller } from './poller.js'
 import { getUpdateState, checkForUpdates, downloadUpdate, quitAndInstall } from './updater.js'
@@ -77,7 +77,8 @@ export function registerIpc({ onConfigSaved } = {}) {
   ipcMain.handle('logs:dir', () => getLogDir())
   ipcMain.handle('logs:open', () => getLogDir() && shell.openPath(getLogDir()))
   // 手动触发时连当天日志一起传：用户点这个按钮就是想立刻把现场交上去
-  ipcMain.handle('logs:upload-now', () => flushLogUpload())
+  // 手动「立即上传」：连当天日志一起强制重传（force 语义见 log-upload.js run）
+  ipcMain.handle('logs:upload-now', () => runLogUpload({ includeToday: true, force: true }))
 
   // 生产也可用快捷键/此接口开 DevTools，Network 看轮询请求
   ipcMain.handle('devtools:open', (e) => {

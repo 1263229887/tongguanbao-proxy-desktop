@@ -1,7 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { autoStart, config, logDir, meta, refreshLogs, saveConfig } from '../store.js'
-import { LOG_LEVEL_OPTIONS } from '../../shared/log-levels.js'
 
 const form = ref(null)
 const saved = ref(false)
@@ -31,12 +30,22 @@ async function uploadNow() {
   uploadNote.value = null
   try {
     const res = await window.intake.uploadLogsNow()
-    if (res?.failed) uploadNote.value = { error: true, text: `有 ${res.failed} 个日志文件上传失败，原因见日志` }
-    else if (res?.uploaded) uploadNote.value = { text: `已上传 ${res.uploaded} 个日志文件` }
-    else if (res?.blocked) uploadNote.value = { text: '平台暂未开启日志接收，本机日志照常保留' }
-    else uploadNote.value = { text: '没有需要上传的新日志' }
+    if (res?.failed) {
+      uploadNote.value = { error: true, text: `有 ${res.failed} 个日志文件上传失败，原因见运行日志` }
+      ElMessage.error(`有 ${res.failed} 个日志文件上传失败，详情见运行日志`)
+    } else if (res?.uploaded) {
+      uploadNote.value = { text: `已成功上传 ${res.uploaded} 个日志文件` }
+      ElMessage.success(`已成功上传 ${res.uploaded} 个日志文件`)
+    } else if (res?.blocked) {
+      uploadNote.value = { text: '平台暂未开启日志接收，本机日志照常保留' }
+      ElMessage.warning('平台暂未开启日志接收，本机日志照常保留')
+    } else {
+      uploadNote.value = { text: '本机暂无可上传的日志' }
+      ElMessage.info('本机暂无可上传的日志')
+    }
   } catch (e) {
     uploadNote.value = { error: true, text: `上传失败：${e?.message || e}` }
+    ElMessage.error(`上传失败：${e?.message || e}`)
   } finally {
     uploading.value = false
     await refreshLogs()
@@ -90,24 +99,16 @@ async function submit() {
           <input v-model.number="form.heartbeatIntervalSeconds" type="number" min="10" max="300" class="field w-full" />
         </div>
       </div>
-      <div class="text-xs text-slate-400 -mt-2">建议心跳 30～60 秒；后端约 3 分钟无心跳会告警。</div>
+      <div class="text-xs text-slate-400 -mt-2">建议心跳 30～60 秒；平台约 3 分钟未收到心跳会告警。</div>
 
       <div class="border-t border-slate-100 pt-4 text-sm font-semibold">日志与调试</div>
 
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <div class="label-text mb-1">本机日志保留天数</div>
-          <input v-model.number="form.logKeepDays" type="number" min="1" max="3650" class="field w-28" />
-        </div>
-        <div>
-          <div class="label-text mb-1">日志详细程度</div>
-          <select v-model="form.logLevel" class="field w-full">
-            <option v-for="item in LOG_LEVEL_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-        </div>
+      <div>
+        <div class="label-text mb-1">本机日志保留天数</div>
+        <input v-model.number="form.logKeepDays" type="number" min="1" max="3650" class="field w-28" />
       </div>
       <div class="text-xs text-slate-400 -mt-2">
-        日志只记录任务编号、文件名、校验值、状态与错误摘要，不会写出密钥或报关单内容。
+        日志只记录任务编号、文件名、校验值、状态与错误摘要，不会写出密钥或报关单内容；详细程度自动调节，无需手动设置。
       </div>
 
       <div class="flex flex-wrap items-center gap-3">
@@ -118,8 +119,8 @@ async function submit() {
         <button class="btn-ghost" :disabled="uploading" @click="uploadNow">{{ uploading ? '上传中…' : '立即上传日志' }}</button>
       </div>
       <div class="text-xs text-slate-500 leading-relaxed -mt-2">
-        现场出问题时，平台运维不登录这台电脑也能查日志。每天上传前一天的日志，退出、升级和程序异常退出时补传当天；
-        断网期间没传上去的，恢复后自动补传。
+        现场出问题时，平台运维不登录这台电脑也能查日志。除手动「立即上传」外：每天自动上传前一天的日志；
+        检测到鉴权失败、回执长期未到、程序异常退出等情形时自动上传当天日志；断网期间没传上去的，恢复后自动补传。
       </div>
       <div v-if="uploadNote" class="text-xs -mt-2" :class="uploadNote.error ? 'text-rose-600' : 'text-emerald-600'">
         {{ uploadNote.text }}

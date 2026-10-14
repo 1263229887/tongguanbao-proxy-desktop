@@ -3,7 +3,18 @@ import zlib from 'node:zlib'
 import { loadConfig } from './config.js'
 import { BIZ_CODE, formatDateTime, missingAccess, uploadLogFile } from './backend.js'
 import { getLogUpload, initLedger, resetTerminalLogUploads, upsertLogUpload } from './ledger.js'
-import { flushLogger, getLogDir, info, listLogFiles, logFileDateKey, readLogBytes, todayKey, warn } from './logger.js'
+import {
+  flushLogger,
+  getLogDir,
+  info,
+  listLogFiles,
+  logFileDateKey,
+  readLogBytes,
+  setFileLevel,
+  getFileLevel,
+  todayKey,
+  warn
+} from './logger.js'
 
 // 本地日志定期上传平台（《前置机日志文件上传对接文档》v1.0），便于后端远程排查客户现场问题。
 // 节奏：日志按天滚动，每轮把已经「封口」（日期早于今天）且没传过的日志压缩后上传；
@@ -30,6 +41,34 @@ let suppressExitFlush = false
 // 每轮都报会写成噪音，还会污染心跳 lastError 让后端误告警
 let channelClosedNoticed = false
 let uploadError = ''
+
+// ---------- 异常自动上报 ----------
+// 触发即写一条 WARN（进当天日志、随后随异常上传带上去），并立即补传当天日志。
+// 同类异常按类型去重节流，避免刷屏与重复上传；异常期临时把写盘级别提到 debug
+// 保留更多现场细节，窗口（10 分钟）过后自动恢复，无需用户配置。
+const ANOMALY_DEBUG_WINDOW_MS = 10 * 60_000
+const anomalyAt = new Map()
+let debugRevertTimer = null
+let debugRevertLevel = null
+
+export function reportAnomaly(type, detail, { minIntervalMs = 30 * 60_000, upload = true } = {}) {
+  const now = Date.now()
+  const last = anomalyAt.get(type) ?? 0
+  if (now - last < minIntervalMs) return false
+  anomalyAt.set(type, now)
+  warn(detail, 'anomaly')
+  if (getFileLevel() !== 'debug') {
+    debugRevertLevel = debugRevertLevel ?? getFileLevel()
+    setFileLevel('debug')
+    clearTimeout(debugRevertTimer)
+    debugRevertTimer = setTimeout(() => {
+      setFileLevel(debugRevertLevel ?? 'info')
+      debugRevertLevel = null
+    }, ANOMALY_DEBUG_WINDOW_MS)
+  }
+  if (upload) void run({ includeToday: true })
+  return true
+}
 
 /** 供心跳汇总：连续上传失败要让后端能感知到「日志上传异常」（对接文档 §5.2） */
 export function getUploadError() {
@@ -141,13 +180,20 @@ async function uploadOne(cfg, file) {
 
 /**
  * 跑一轮上传。
- * includeToday=true 时连当天日志一起传（退出/装更新/异常退出后补档用）；
+ * includeToday=true 时连当天日志一起传（退出/装更新/异常退出/异常自动上报时用）；
  * 默认只传已封口的历史文件——当天文件还在被写，传上去也是残缺的。
+ * force=true 为手动「立即上传」：等在途轮次结束后，解锁此前被拒（BLOCKED）的记录、
+ * 忽略重试退避，并强制重传当天文件（内容可能没变，但用户点上传就该真的传上去）。
  */
-export async function run({ includeToday = false } = {}) {
+export async function run({ includeToday = false, force = false } = {}) {
   const done = { uploaded: 0, failed: 0, blocked: 0, skipped: 0 }
   // 占位要放在第一个 await 之前：定时轮次和退出前的 flushNow 可能同时进来，
-  // 先 await 再占位的话两边都会通过检查，同一个文件被压缩上传两遍
+  // 先 await 再占位的话两边都会通过检查，同一个文件被压缩上传两遍。
+  // 手动上传则等在途轮次结束（最多 30 秒）再接管，保证点一下就真的传
+  if (force && busy) {
+    const deadline = Date.now() + 30_000
+    while (busy && Date.now() < deadline) await new Promise((r) => setTimeout(r, 400))
+  }
   if (busy) return done
   busy = true
   try {
@@ -159,6 +205,11 @@ export async function run({ includeToday = false } = {}) {
     if (!getLogDir()) return done
     // 当天文件的写流是带缓冲的，读之前先 flush，否则丢掉尾部几条（往往正是退出/崩溃那几条）
     if (includeToday) await flushLogger()
+    // 手动上传给被平台拒绝过的日志再一次机会（换配置后同理）
+    if (force) {
+      const reset = resetTerminalLogUploads()
+      if (reset) info(`手动上传：${reset} 个此前被平台拒绝的日志文件重新尝试`, 'upload')
+    }
 
     const today = todayKey()
     const files = listLogFiles().filter((f) => {
@@ -169,12 +220,17 @@ export async function run({ includeToday = false } = {}) {
 
     for (const file of files) {
       const prev = getLogUpload(file.name)
-      // 内容没变就不重传：封口文件传一次即终态；当天文件在多次退出之间会继续增长，靠 size 判定是否补传
-      if (prev && prev.size === file.size && prev.state !== 'RETRY_PENDING' && prev.state !== 'PENDING') {
+      const isToday = logFileDateKey(file.name) === today
+      // 内容没变就不重传：封口文件传一次即终态；当天文件在多次退出之间会继续增长，靠 size 判定是否补传。
+      // 手动上传（force）对当天文件豁免去重——用户点「立即上传」就该真的上传
+      const sameSize = prev && prev.size === file.size
+      const settledDone = sameSize && prev.state !== 'RETRY_PENDING' && prev.state !== 'PENDING'
+      if (settledDone && !(force && isToday)) {
         done.skipped++
         continue
       }
-      if (prev?.state === 'RETRY_PENDING' && Date.now() < (prev.nextRetryAt ?? 0)) {
+      // 重试退避只约束自动轮次；手动上传立即重试
+      if (!force && prev?.state === 'RETRY_PENDING' && Date.now() < (prev.nextRetryAt ?? 0)) {
         done.skipped++
         continue
       }
