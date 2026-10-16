@@ -7,10 +7,11 @@ import { closeLogger, error, info, initLogger, log, subscribe, warn } from './lo
 import { closeLedger, initLedger } from './ledger.js'
 import { flushNow as flushLogs, reportAnomaly, start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
 import { beginShutdown, markCleanExit, markRunning, setupCrashGuard } from './crash-guard.js'
-import { onStateChange as onPollState, resume as resumePoller, stop as stopPoller } from './poller.js'
+import { onStateChange as onPollState, resume as resumePoller, runNow as runPollerOnce, stop as stopPoller } from './poller.js'
 import { createTray, destroyTray } from './tray.js'
 import { APP_ENV } from './env.js'
 import { onUpdateState, setupUpdater, stopUpdater } from './updater.js'
+import { setupPowerKeepAlive, applyKeepAwake, applyDisplayAwake } from './power.js'
 
 const DEV_URL = process.env.ELECTRON_RENDERER_URL
 // dev 下禁用 HTTP 磁盘缓存：vite 预打包依赖带 immutable 缓存头，缓存一旦损坏
@@ -274,8 +275,10 @@ async function bootstrap() {
     onConfigSaved: async (next) => {
       initLogger({ days: next.logKeepDays, level: next.logLevel })
       writeAutoStart(next.autoLaunch)
+      applyKeepAwake(next.keepAwake !== false)
+      applyDisplayAwake(next.keepDisplayAwake === true)
       await resumePoller()
-      // 换密钥/换地址后，此前被平台拒收的日志重新尝试一次
+      // 换密钥/换地址后，此前因鉴权或通道被拒的日志重新尝试一次
       await startLogUpload({ resetTerminal: true })
     }
   })
@@ -288,6 +291,16 @@ async function bootstrap() {
   createTray({ showWindow: showMainWindow, quit: quitApp })
   setupDevToolsShortcut()
   setupUpdater()
+  // 电源保活（保持唤醒，配置可关）+ 睡眠/恢复感知：恢复后立即跑一轮业务与日志上传，
+  // 不等下一个定时器——睡眠刚醒网卡要几秒才回来，首轮失败会走既有重试
+  setupPowerKeepAlive({
+    keepAwake: cfg.keepAwake !== false,
+    keepDisplayAwake: cfg.keepDisplayAwake === true,
+    resume: () => {
+      void runPollerOnce()
+      void flushLogs()
+    }
+  })
 
   info(`${app.name} ${app.getVersion()} 启动，env=${APP_ENV}，日志目录 ${logDir}`, 'app')
   if (app.isPackaged) writeAutoStart(cfg.autoLaunch)

@@ -11,6 +11,27 @@ const openingDevTools = ref(false)
 const openLogDir = () => window.intake.openLogDir()
 const canEditServer = () => meta.value?.env !== 'prod'
 
+// 关闭「保持唤醒」属高风险操作：系统可能自动睡眠 → 断网 → 代理任务/心跳/回执全部中断，
+// 必须明确警告；用户取消则勾选状态回滚
+watch(
+  () => form.value?.keepAwake,
+  (val, old) => {
+    if (val === false && old === true) {
+      ElMessageBox.confirm(
+        '关闭后，电脑闲置时可能自动进入睡眠/休眠，届时网络中断，报关单拉取、投递与回执上传都会停止，直到有人操作电脑唤醒。',
+        '确定关闭「保持唤醒」？',
+        { confirmButtonText: '仍要关闭', cancelButtonText: '保持开启', type: 'warning' }
+      )
+        .then(() => {
+          ElMessage.warning('已关闭保持唤醒（保存后生效），请注意保持电脑不休眠')
+        })
+        .catch(() => {
+          form.value.keepAwake = true
+        })
+    }
+  }
+)
+
 async function openDevTools() {
   openingDevTools.value = true
   try {
@@ -73,6 +94,20 @@ async function submit() {
         <input v-model="form.autoLaunch" type="checkbox" class="w-3.5 h-3.5 accent-[#2f6fed]" />
         <span class="text-sm">开机自动启动</span>
       </label>
+
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input v-model="form.keepAwake" type="checkbox" class="w-3.5 h-3.5 accent-[#2f6fed]" />
+        <span class="text-sm">保持本机唤醒（阻止系统自动睡眠/休眠）</span>
+      </label>
+
+      <label class="flex items-center gap-2 cursor-pointer select-none">
+        <input v-model="form.keepDisplayAwake" type="checkbox" class="w-3.5 h-3.5 accent-[#2f6fed]" />
+        <span class="text-sm">屏幕常亮（屏幕与系统均保持唤醒，耗电略增）</span>
+      </label>
+      <div class="text-xs text-slate-500 leading-relaxed -mt-2">
+        前置机需全天在线，建议保持「保持唤醒」开启：系统闲置时不会自动睡眠/休眠，屏幕仍会正常关闭省电；
+        需要随时查看运行状态时可开启「屏幕常亮」。用户主动睡眠与笔记本合盖动作不受此控，需在系统电源计划中设置。
+      </div>
 
       <div class="text-xs text-slate-500 leading-relaxed -mt-2">
         关闭主窗口后程序仍在后台代理，需在任务栏或托盘图标上右键「退出」才会彻底结束。

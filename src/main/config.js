@@ -29,7 +29,11 @@ const DEFAULTS = {
   logKeepDays: 30,
   // 写盘日志级别：界面不再暴露，恒为 info；异常期由 log-upload.js 的智能调节临时升到 debug
   logLevel: 'info',
-  autoLaunch: true
+  autoLaunch: true,
+  // 保持唤醒：阻止系统自动睡眠/休眠（参数配置可关；默认开——忘开会导致前置机断网）
+  keepAwake: true,
+  // 屏幕常亮：屏幕与系统都保持唤醒（默认关——业务不需要屏幕，纯展示用，常亮费电）
+  keepDisplayAwake: false
 }
 
 let cache = null
@@ -182,7 +186,9 @@ function normalize(raw) {
     // 日志写盘级别恒为 info：界面不暴露；异常期由 log-upload.js 智能调节临时升到 debug。
     // 旧配置里的 logLevel / logUpload 字段在此自然丢弃（上传恒开，无开关）
     logLevel: DEFAULTS.logLevel,
-    autoLaunch: raw.autoLaunch !== false
+    autoLaunch: raw.autoLaunch !== false,
+    keepAwake: raw.keepAwake !== false,
+    keepDisplayAwake: raw.keepDisplayAwake === true
   }
 }
 

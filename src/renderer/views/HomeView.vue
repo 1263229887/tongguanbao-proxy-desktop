@@ -210,6 +210,11 @@ const bizCards = computed(() =>
 
 <template>
   <div class="h-full overflow-y-auto p-5 flex flex-col gap-3">
+    <div class="panel px-4 py-2.5 border-amber-200 bg-amber-50/70 shrink-0 flex items-center gap-2 text-xs leading-relaxed text-amber-800">
+      <span class="shrink-0 w-4 h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold flex items-center justify-center">!</span>
+      <span>前置机需全天保持联网：请勿让电脑进入睡眠/休眠（参数配置中默认已开启「保持唤醒」）；笔记本请同时在系统电源计划中设置「合盖不睡眠」。</span>
+    </div>
+
     <div v-if="updateTip" class="panel px-4 py-3 border-brand-200 bg-brand-50/70 shrink-0 flex items-center gap-3">
       <span class="shrink-0 w-5 h-5 rounded-full bg-brand-500 text-white text-[11px] font-bold flex items-center justify-center">↑</span>
       <p class="text-xs leading-relaxed text-brand-700 flex-1">{{ updateTip }}</p>
