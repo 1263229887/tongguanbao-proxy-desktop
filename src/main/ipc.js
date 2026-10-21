@@ -10,6 +10,7 @@ import { flushNow as flushLogUpload, run as runLogUpload } from './log-upload.js
 import { clearLogs, getLogDir, getLogs, listLogFiles, readLogFile } from './logger.js'
 import { getState, runNow, start as startPoller, stop as stopPoller } from './poller.js'
 import { getUpdateState, checkForUpdates, downloadUpdate, quitAndInstall } from './updater.js'
+import { clearPendingBusinessRestore, readPendingBusinessRestore } from './upgrade-restore.js'
 import { importSwBizDirs } from './sw-import.js'
 import { info, warn } from './logger.js'
 
@@ -110,6 +111,10 @@ export function registerIpc({ onConfigSaved } = {}) {
   ipcMain.handle('update:state', () => getUpdateState())
   ipcMain.handle('update:download', () => downloadUpdate())
   ipcMain.handle('update:install', () => quitAndInstall())
+
+  // 升级后恢复业务开关：读取为幂等操作，用户做出选择后再清除记录
+  ipcMain.handle('upgrade:pendingBizRestore', () => readPendingBusinessRestore())
+  ipcMain.handle('upgrade:clearBizRestore', () => clearPendingBusinessRestore())
 }
 
 export { broadcast }

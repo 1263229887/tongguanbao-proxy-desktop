@@ -9,10 +9,11 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { app } from 'electron'
-import { getAgentState, stopAgent, waitIdle } from './agent.js'
+import { getAgentState, getRunningBizTypes, stopAgent, waitIdle } from './agent.js'
 import { APP_ENV } from './env.js'
 import { flushNow as flushLogs, suppressNextExitFlush } from './log-upload.js'
 import { debug, error, info, warn } from './logger.js'
+import { markPendingBusinessRestore } from './upgrade-restore.js'
 import { feedUrlFor } from './update-config.js'
 
 // electron-updater 是 CJS 包，ESM 下必须默认导入再解构（命名导入会报 does not provide an export）
@@ -269,6 +270,8 @@ export async function downloadUpdate() {
 export async function quitAndInstall() {
   if (!app.isPackaged) return { ok: false, reason: '开发模式不支持在线更新' }
   if (state.status !== 'downloaded') return { ok: false, reason: '更新尚未下载完成' }
+  // 必须在停代理前取：升级会重启进程且代理不自启，记下来供新版本首次启动时询问是否重新开启
+  const runningBiz = getRunningBizTypes()
   // 安装即退出：先停代理，等在途的任务投递/回执上传收尾，避免打断与后端、单一窗口目录交互中的任务
   try {
     if (getAgentState().running) {
@@ -285,6 +288,7 @@ export async function quitAndInstall() {
   } catch (e) {
     warn(`安装前上传日志异常：${e?.message ?? e}`, 'update')
   }
+  markPendingBusinessRestore(runningBiz, state.version)
   suppressNextExitFlush()
   info('代理任务已收尾，退出并安装新版本', 'update')
   // 延后一拍让 IPC 先返回；静默安装 + 装完自动拉起新版本

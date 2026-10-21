@@ -6,6 +6,7 @@ import AccessView from './views/AccessView.vue'
 import DirView from './views/DirView.vue'
 import ParamView from './views/ParamView.vue'
 import AboutView from './views/AboutView.vue'
+import { isRunning, startBiz } from './biz-run.js'
 import { initStore, meta, pollState, updateState, view, go } from './store.js'
 
 const VIEWS = { home: HomeView, access: AccessView, dir: DirView, param: ParamView, about: AboutView }
@@ -57,7 +58,67 @@ watch(
   }
 )
 
-onMounted(initStore)
+onMounted(async () => {
+  await initStore()
+  await offerBizRestoreAfterUpgrade()
+})
+
+async function clearBizRestoreMarker() {
+  try {
+    await window.intake.clearPendingBizRestore()
+  } catch {}
+}
+
+// 在线升级会重启进程，代理默认不自启。主进程在安装前记录了升级前开着的业务，
+// 这里在升级后首次启动时询问是否重新开启；用户没做选择就退出，下次启动还会再问
+async function offerBizRestoreAfterUpgrade() {
+  let pending = null
+  try {
+    pending = await window.intake.getPendingBizRestore()
+  } catch {
+    return
+  }
+  const pendingItems = pending?.items ?? []
+  if (!pendingItems.length) return
+  // 启动时已经在运行的业务不再重复询问（例如升级流程将来改成自动拉起代理）
+  const items = pendingItems.filter((item) => !isRunning(item.id))
+  if (!items.length) {
+    await clearBizRestoreMarker()
+    return
+  }
+  const names = items.map((item) => `「${item.title}」`).join('、')
+
+  try {
+    await ElMessageBox.confirm(
+      `升级前${names}处于开启状态，相关目录配置也完整。是否现在重新开启？选择「暂不开启」后，仍可在首页随时手动启动。`,
+      '升级完成',
+      {
+        confirmButtonText: '重新开启',
+        cancelButtonText: '暂不开启',
+        type: 'success',
+        showClose: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false
+      }
+    )
+  } catch {
+    await clearBizRestoreMarker()
+    return
+  }
+
+  const failed = []
+  for (const item of items) {
+    const res = await startBiz(item.id)
+    if (!res.ok) failed.push(`「${item.title}」：${res.reason}`)
+  }
+  await clearBizRestoreMarker()
+
+  if (failed.length) {
+    ElNotification({ title: '未能重新开启', message: failed.join('；'), type: 'warning', duration: 12000 })
+  } else {
+    ElNotification({ title: '业务已重新开启', message: `${names}已按之前的配置继续运行`, type: 'success', duration: 6000 })
+  }
+}
 </script>
 
 <template>

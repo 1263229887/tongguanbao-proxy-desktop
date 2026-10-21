@@ -117,6 +117,11 @@ export function getAgentState() {
   return { ...state }
 }
 
+/** 当前真正在运行的业务模块 id（在线升级前记录、升级后询问是否恢复用） */
+export function getRunningBizTypes() {
+  return state.running ? [BIZ.bizType] : []
+}
+
 function goodsDirs(cfg) {
   const d = cfg.bizDirs?.[BIZ.bizType]
   return {
