@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('intake', {
   downloadUpdate: () => invoke('update:download'),
   getUpdateState: () => invoke('update:state'),
   installUpdate: () => invoke('update:install'),
+  getPendingBizRestore: () => invoke('upgrade:pendingBizRestore'),
+  clearPendingBizRestore: () => invoke('upgrade:clearBizRestore'),
 
   // 主进程 → 渲染进程：发起 HTTP
   onNetRequest: listen('net:do-request'),
