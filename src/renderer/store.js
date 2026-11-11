@@ -8,6 +8,8 @@ export const PHASE_TEXT = {
 }
 
 export const view = ref('home')
+// 首页与目录配置页内的模块页签：sw=单一窗口，ceb=渠道入口
+export const uiTabs = ref({ home: 'sw', dir: 'sw' })
 export const meta = ref(null)
 export const config = ref(null)
 export const pollState = ref({
@@ -54,6 +56,11 @@ export const updateState = ref({
 })
 
 export function go(next) {
+  view.value = next
+}
+
+export function goTab(next, tab) {
+  uiTabs.value = { ...uiTabs.value, [next]: tab }
   view.value = next
 }
 

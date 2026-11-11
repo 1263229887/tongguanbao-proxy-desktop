@@ -25,15 +25,17 @@ const statusTone = {
   idle: 'bg-slate-300'
 }
 
-// 顶栏状态汇总两套引擎：任一运行即「轮询执行中」，错误取先出现的一条
+// 顶栏状态汇总两套引擎：任一运行即「轮询执行中」；未运行时不保留上次的报错，统一显示未启动
 const headerStatus = computed(() => {
   const a = pollState.value
   const b = cebState.value
   if (a.running || b.running) return { tone: 'warn', text: '轮询执行中' }
-  const err = a.lastError || b.lastError
-  if (err) return { tone: 'bad', text: err }
-  if (a.polling || b.polling) return { tone: 'ok', text: '轮询中' }
-  return { tone: 'idle', text: '按业务启动' }
+  if (a.polling || b.polling) {
+    const err = a.lastError || b.lastError
+    if (err) return { tone: 'bad', text: err }
+    return { tone: 'ok', text: '轮询中' }
+  }
+  return { tone: 'idle', text: '未启动任何业务' }
 })
 
 // 发现新版本 / 下载完成时主动弹提醒（右上角，点击直达关于页）。

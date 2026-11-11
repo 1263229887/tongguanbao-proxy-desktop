@@ -57,6 +57,18 @@ const BIZ = {
   tradeModes: ['export', 'import', '9610', '9710', '9810'] // 本模块允许拉取的任务分类
 }
 
+// 部分环境的后端尚未放开 9710/9810（tradeModes 校验只有 export|import|9610）。
+// 首次拉取被参数校验拒绝时自动降级一次，避免整条连接被误判为断开；后端升级后自动恢复全集，无需改代码。
+const LEGACY_TRADE_MODES = ['export', 'import', '9610']
+let pullTradeModes = [...BIZ.tradeModes]
+let tradeModesDowngraded = false
+
+function isTradeModesRejected(res) {
+  if (res?.ok !== false) return false
+  const msg = String(res.msg || '')
+  return /正则表达式|tradeModes/i.test(msg) && msg.includes('9610')
+}
+
 const state = {
   running: false,
   enabled: false,
@@ -441,10 +453,23 @@ async function tickTasks() {
       return patch({ lastError: '货物申报 OutBox 未配置' })
     }
 
-    const res = await pullTasks(cfg, {
-      tradeModes: BIZ.tradeModes,
+    let res = await pullTasks(cfg, {
+      tradeModes: pullTradeModes,
       batchSize: cfg.batchSize
     })
+
+    // 后端 tradeModes 枚举还不支持 9710/9810 时，按当前支持的分类重试一次
+    if (isTradeModesRejected(res) && pullTradeModes.length > LEGACY_TRADE_MODES.length) {
+      pullTradeModes = [...LEGACY_TRADE_MODES]
+      if (!tradeModesDowngraded) {
+        tradeModesDowngraded = true
+        warn(`平台暂不支持 9710/9810 报关任务分类，拉取改用 export/import/9610：${res.msg}`, 'pull')
+      }
+      res = await pullTasks(cfg, {
+        tradeModes: pullTradeModes,
+        batchSize: cfg.batchSize
+      })
+    }
 
     if (!res.ok) {
       if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {

@@ -1,15 +1,25 @@
 // 业务类型目录配置的共用目录表：大标题 + 小标题（多数相同，货物申报/报关单暂存不同）
-// channelBased=true 的业务不用 bizDirs 四目录，改用渠道列表（cebChannels）：每个渠道一套自己的客户端收发目录
+// 这里只含单一窗口导入客户端的业务，目录配置页按此列表渲染
 export const BUSINESS_TYPES = [
   { id: 'default', title: '默认', subtitle: '默认' },
   { id: 'agency', title: '报关代理委托申报', subtitle: '报关代理委托申报' },
-  { id: 'ecImport', title: '跨境电商进口', subtitle: '跨境电商进口' },
-  { id: 'ecExport', title: '跨境电商出口', subtitle: '跨境电商出口' },
   { id: 'goods', title: '货物申报', subtitle: '报关单暂存' },
-  { id: 'ceb', title: '跨境电商申报', subtitle: '9610 清单 / 9710·9810 前置申报', channelBased: true },
   { id: 'manifest', title: '海运/空运舱单申报', subtitle: '海运/空运舱单申报' },
   { id: 'amend', title: '报关单修撤', subtitle: '报关单修撤' }
 ]
+
+// 跨境电商（CEB）独立业务：跨境电商进口 / 出口统一走渠道入口，
+// 目录在「目录配置 → 渠道入口」页签维护（cebChannels），不进 bizDirs，
+// 也不出现在单一窗口目录配置列表里。channelBased=true 供首页、启停与升级恢复区分处理。
+export const CEB_BIZ = {
+  id: 'ceb',
+  title: '跨境电商申报',
+  subtitle: '9610 清单 / 9710·9810 前置申报',
+  channelBased: true
+}
+
+// 首页业务卡片与启停用：单一窗口业务 + 跨境电商（跨境电商排在货物申报之后）
+export const ALL_BIZ_TYPES = [...BUSINESS_TYPES.slice(0, 3), CEB_BIZ, ...BUSINESS_TYPES.slice(3)]
 
 export const DIR_FIELDS = [
   { key: 'outBox', label: '待发送文件目录', short: '待发送' },
@@ -23,8 +33,6 @@ export const DIR_FIELDS = [
 export const SW_FORM_TO_BIZ = {
   OTHERS: 'default',
   ACD: 'agency',
-  IMPCEB: 'ecImport',
-  EXPCEB: 'ecExport',
   DECCUS001: 'goods',
   MFT: 'manifest',
   DECCUS102: 'amend'

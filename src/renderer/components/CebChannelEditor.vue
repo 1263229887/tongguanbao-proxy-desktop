@@ -1,10 +1,10 @@
 <script setup>
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { config, saveConfig } from '../store.js'
-import { CEB_DIR_FIELDS, CEB_ROUTES, emptyCebChannel } from '../../shared/biz-types.js'
+import { CEB_DIR_FIELDS, emptyCebChannel } from '../../shared/biz-types.js'
 
 // 跨境电商渠道目录编辑：每个渠道一个独立传输客户端（深圳公服只是其中之一），各有收发目录。
-// 任务按报文 BaseTransfer.dxpId 匹配渠道；dxpId 留空作该路由兜底。与 DirView 一致的 400ms 自动保存。
+// 任务按报文 BaseTransfer.dxpId 匹配渠道；dxpId 留空作兜底，投递路由由平台按任务类型区分。
 const SAVE_DEBOUNCE_MS = 400
 
 const channels = ref(null)
@@ -113,10 +113,9 @@ const NOTICE_TONE = {
 <template>
   <div v-if="channels" class="flex flex-col gap-3">
     <div class="rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-3 text-xs leading-relaxed text-slate-600">
-      每个渠道对应一个<strong class="font-medium text-slate-700">独立传输客户端</strong>（深圳公服只是其中之一），各有自己的发送 / 接收目录。
-      任务按报文中的 <strong class="font-medium text-slate-700">dxpId</strong> 自动匹配渠道：填写渠道 dxpId 可精确匹配，留空则作为该路由的兜底目录。
-      发送目录（写入申报报文）与接收目录（读取回执）必填，备份 / 失败目录选填。
-      9710 / 9810 的<strong class="font-medium text-slate-700">报关单申报</strong>仍走「货物申报」目录，此处仅配置前置申报与清单申报。
+      任务按报文中的 <strong class="font-medium text-slate-700">dxpId</strong> 匹配渠道：填写渠道 dxpId 可精确匹配，留空则作为兜底目录。
+      海关申报与前置申报由平台按任务类型自动区分，无需在渠道里选择投递路由。
+      发送目录（写入申报报文）与接收目录（读取回执）必填，备份 / 失败目录选填；目录须与对方传输客户端完全一致。
     </div>
 
     <div v-if="!channels.length" class="rounded-lg border border-dashed border-slate-300 px-4 py-6 text-center text-xs text-slate-400">
@@ -130,15 +129,12 @@ const NOTICE_TONE = {
           <span class="text-xs text-slate-500">启用</span>
         </label>
         <input v-model="ch.name" class="field flex-1 min-w-0" placeholder="渠道名称，如：深圳公服" @input="edited" />
-        <el-select v-model="ch.route" class="w-[240px] shrink-0" @change="edited">
-          <el-option v-for="r in CEB_ROUTES" :key="r.id" :label="r.label" :value="r.id" />
-        </el-select>
         <button class="btn-ghost shrink-0 !px-2.5 text-rose-600 hover:bg-rose-50" title="删除该渠道" @click="removeChannel(ch)">删除</button>
       </div>
 
       <div class="px-3.5 py-3 flex flex-col gap-3">
         <div>
-          <div class="label-text mb-1">报文 dxpId（选填，留空作该路由兜底）</div>
+          <div class="label-text mb-1">报文 dxpId（选填，留空作兜底）</div>
           <input v-model="ch.dxpId" class="field w-full" placeholder="与对方传输客户端配置一致，如 DXPENT0000000001" @input="edited" />
         </div>
 

@@ -1,8 +1,9 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { config, saveConfig } from '../store.js'
+import { config, saveConfig, uiTabs } from '../store.js'
 import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs, emptyBizDir } from '../../shared/biz-types.js'
 import CebChannelEditor from '../components/CebChannelEditor.vue'
+import SegTabs from '../components/SegTabs.vue'
 
 const TASKS_MIN = 1
 const TASKS_MAX = 5
@@ -22,8 +23,6 @@ const importResult = ref(null)
 function cloneBizDirs(src) {
   const next = {}
   for (const type of BUSINESS_TYPES) {
-    // 渠道型业务（跨境电商）的目录在 cebChannels 里，由 CebChannelEditor 单独管理，不进 bizDirs
-    if (type.channelBased) continue
     next[type.id] = { ...emptyBizDir(), ...(src?.[type.id] ?? {}) }
   }
   return next
@@ -36,9 +35,7 @@ watch(
     form.value = { bizDirs: cloneBizDirs(val.bizDirs) }
     if (val.swImportBasePath) importPath.value = val.swImportBasePath
     const open = {}
-    const filled = BUSINESS_TYPES.filter((t) =>
-      t.channelBased ? (val.cebChannels || []).length > 0 : countFilledDirs(val.bizDirs?.[t.id]) > 0
-    )
+    const filled = BUSINESS_TYPES.filter((t) => countFilledDirs(val.bizDirs?.[t.id]) > 0)
     if (filled.length) for (const t of filled) open[t.id] = true
     else open[BUSINESS_TYPES[0].id] = true
     expanded.value = open
@@ -53,9 +50,22 @@ onBeforeUnmount(() => {
 const openCount = computed(() => Object.values(expanded.value).filter(Boolean).length)
 const bizById = Object.fromEntries(BUSINESS_TYPES.map((t) => [t.id, t]))
 
-// 分组折叠条上的摘要：渠道型业务报渠道数，其余报目录填充数与并发
+// 页面内两个模块：单一窗口沿用原目录配置，渠道入口管理跨境电商渠道
+const DIR_TABS = [
+  { value: 'sw', label: '单一窗口' },
+  { value: 'ceb', label: '渠道入口' }
+]
+const dirTab = computed({
+  get: () => uiTabs.value.dir,
+  set: (tab) => {
+    uiTabs.value = { ...uiTabs.value, dir: tab }
+  }
+})
+const channels = computed(() => config.value?.cebChannels || [])
+const activeChannels = computed(() => channels.value.filter((c) => c && c.enabled !== false).length)
+
+// 分组折叠条上的摘要：目录填充数与并发
 function groupSummary(type) {
-  if (type.channelBased) return `渠道 ${(config.value?.cebChannels || []).length} 个`
   const entry = form.value?.bizDirs?.[type.id]
   return `目录 ${countFilledDirs(entry)}/${DIR_FIELDS.length} · 并发 ${entry?.maxConcurrentTasks ?? '—'}`
 }
@@ -243,10 +253,18 @@ const NOTICE_TONE = {
     <div class="w-full flex flex-col gap-3">
       <div class="flex items-center gap-2">
         <span class="text-sm font-semibold">目录配置</span>
-        <span class="text-xs text-slate-400">按业务类型设置，目录须与单一窗口导入客户端一致。</span>
-        <span class="ml-auto text-xs text-slate-400">已展开 {{ openCount }} / {{ BUSINESS_TYPES.length }}</span>
+        <span class="text-xs text-slate-400">
+          {{ dirTab === 'sw' ? '按业务类型设置，目录须与单一窗口导入客户端一致。' : '跨境电商进口 / 出口按渠道设置，目录须与各渠道传输客户端一致。' }}
+        </span>
+        <span v-if="dirTab === 'sw'" class="ml-auto text-xs text-slate-400">已展开 {{ openCount }} / {{ BUSINESS_TYPES.length }}</span>
+        <span v-else class="ml-auto text-xs text-slate-400">已配置 {{ channels.length }} 个 · 已启用 {{ activeChannels }} 个</span>
       </div>
 
+      <div class="flex items-center gap-3">
+        <SegTabs v-model="dirTab" :items="DIR_TABS" />
+      </div>
+
+      <template v-if="dirTab === 'sw'">
       <div class="panel p-4 flex flex-col gap-3">
         <div class="flex items-center gap-2">
           <span class="text-sm font-semibold">从单一窗口导入</span>
@@ -301,9 +319,7 @@ const NOTICE_TONE = {
             <span>{{ type.subtitle }}</span>
           </div>
 
-          <CebChannelEditor v-if="type.channelBased" />
-
-          <div v-else class="flex flex-col gap-4 lg:flex-row lg:items-center">
+          <div class="flex flex-col gap-4 lg:flex-row lg:items-center">
             <div class="flex-1 min-w-0 flex flex-col gap-3">
               <div v-for="field in DIR_FIELDS" :key="field.key">
                 <div class="label-text mb-1">{{ field.label }}</div>
@@ -348,6 +364,16 @@ const NOTICE_TONE = {
           </div>
         </div>
       </div>
+      </template>
+
+      <template v-else>
+        <p class="px-1 text-[11px] leading-relaxed text-slate-400">
+          跨境电商进口 / 出口（9610 订单 / 运单 / 清单申报、9710·9810 订单前置申报）按渠道投递；9710·9810 报关单仍走单一窗口「货物申报」，在「单一窗口」页签维护。
+        </p>
+        <div class="panel p-4">
+          <CebChannelEditor />
+        </div>
+      </template>
 
       <div v-if="notice" class="text-xs" :class="NOTICE_TONE[notice.tone]">{{ notice.text }}</div>
     </div>

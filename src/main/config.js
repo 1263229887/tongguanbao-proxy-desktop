@@ -28,6 +28,7 @@ const DEFAULTS = {
   // 9710/9810 的报关单暂存复用原 DEC 链路（货物申报目录），拉取范围须显式包含（CB-AGENT-01）
   tradeModes: ['export', 'import', '9610', '9710', '9810'],
   // 跨境电商渠道：每个渠道对应现场一个独立传输客户端及其收发目录，按报文 dxpId 匹配
+  // 现场路径不得预置：客户客户端安装盘符/目录各不相同，正式包首次启动必须为空，由现场配置或导入
   cebChannels: [],
   logKeepDays: 30,
   // 写盘日志级别：界面不再暴露，恒为 info；异常期由 log-upload.js 的智能调节临时升到 debug
@@ -155,8 +156,6 @@ function normalizeBizDirs(raw) {
   const source = raw.bizDirs && typeof raw.bizDirs === 'object' ? raw.bizDirs : {}
   const result = {}
   for (const type of BUSINESS_TYPES) {
-    // 渠道制业务（跨境电商 CEB）不用四目录组，配置在 cebChannels
-    if (type.channelBased) continue
     const src = source[type.id]
     result[type.id] = src ? normalizeBizDir(src, DEFAULTS.maxConcurrentTasks) : type.id === 'goods' ? legacy : emptyBizDir()
   }

@@ -1,17 +1,17 @@
 import { computed, reactive } from 'vue'
-import { BUSINESS_TYPES, DIR_FIELDS } from '../shared/biz-types.js'
+import { ALL_BIZ_TYPES, DIR_FIELDS } from '../shared/biz-types.js'
 import { config, go } from './store.js'
 
 // 各业务启停：货物申报（DEC）与跨境电商（CEB）各接一套主进程引擎；其余业务暂未对接后台
 const state = reactive({})
 
-for (const t of BUSINESS_TYPES) {
+for (const t of ALL_BIZ_TYPES) {
   state[t.id] = { running: false, startedAt: null, stopping: false }
 }
 
 export const bizRun = state
 
-export const runningCount = computed(() => BUSINESS_TYPES.filter((t) => state[t.id]?.running).length)
+export const runningCount = computed(() => ALL_BIZ_TYPES.filter((t) => state[t.id]?.running).length)
 
 export function isRunning(typeId) {
   return !!state[typeId]?.running
@@ -24,7 +24,7 @@ const RUNTIME = {
 }
 
 export function missingDirs(typeId) {
-  const type = BUSINESS_TYPES.find((t) => t.id === typeId)
+  const type = ALL_BIZ_TYPES.find((t) => t.id === typeId)
   // 渠道型业务没有 bizDirs 组：以「启用渠道」为单位检查收发目录是否配齐
   if (type?.channelBased) {
     const active = (config.value?.cebChannels || []).filter((c) => c && c.enabled !== false)

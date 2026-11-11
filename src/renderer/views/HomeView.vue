@@ -2,8 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from '../vendor/gsap.min.js'
 import StatusTile from '../components/StatusTile.vue'
-import { config, go, meta, pollState, cebState, updateState } from '../store.js'
-import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs, cebChannelReady } from '../../shared/biz-types.js'
+import SegTabs from '../components/SegTabs.vue'
+import { config, go, goTab, meta, pollState, cebState, updateState, uiTabs } from '../store.js'
+import { ALL_BIZ_TYPES, DIR_FIELDS, countFilledDirs, cebChannelReady } from '../../shared/biz-types.js'
 import { bizRun, isRunning, missingDirs, startBiz, stopBiz } from '../biz-run.js'
 
 // 主进程代理状态与首页「货物申报」卡片对齐
@@ -32,7 +33,7 @@ watch(
 
 const GUIDE = [
   { view: 'access', label: '权限配置', desc: '填写企业鉴权密钥（sk-…），可点眼睛图标显示/隐藏。开发/测试包可维护多组服务器地址 + 密钥并互切；生产包地址已内置，只需配密钥。保存后可点「测试访问」确认能否连通。' },
-  { view: 'dir', label: '目录配置', desc: '货物申报请配置统一 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入；跨境电商请按渠道添加发送 / 接收目录（每个渠道对应一个独立传输客户端，如深圳公服）。目录必须与对方完全一致。' },
+  { view: 'dir', label: '目录配置', desc: '「单一窗口」页签配置各业务 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入；「渠道入口」页签按渠道配置跨境电商进口 / 出口的发送 / 接收目录。目录必须与对方完全一致。' },
   { view: 'param', label: '参数配置', desc: '轮询间隔、回执/心跳间隔、开机自动启动、日志保留。本地开发可打开调试控制台查看 Network。' },
   { view: 'about', label: '关于与后台运行', desc: '在「关于」可查看版本信息。关闭主窗口后程序仍在后台；彻底退出请在托盘图标上右键。生产环境可用 Ctrl+Shift+I 打开调试台。' }
 ]
@@ -151,14 +152,14 @@ function startRunAnim(typeId) {
 }
 
 function syncRunAnims() {
-  for (const t of BUSINESS_TYPES) {
+  for (const t of ALL_BIZ_TYPES) {
     if (isRunning(t.id)) startRunAnim(t.id)
     else killRunAnim(t.id)
   }
 }
 
 watch(
-  () => BUSINESS_TYPES.map((t) => isRunning(t.id)),
+  () => ALL_BIZ_TYPES.map((t) => isRunning(t.id)),
   () => syncRunAnims(),
   { flush: 'post' }
 )
@@ -201,7 +202,26 @@ function onStop(type) {
 }
 
 // 首页业务启动不展示「默认」；目录配置仍保留
-const HOME_BIZ_TYPES = BUSINESS_TYPES.filter((t) => t.id !== 'default')
+const HOME_BIZ_TYPES = ALL_BIZ_TYPES.filter((t) => t.id !== 'default')
+
+const HOME_TABS = [
+  { value: 'sw', label: '单一窗口' },
+  { value: 'ceb', label: '渠道入口' }
+]
+
+const homeTab = computed({
+  get: () => uiTabs.value.home,
+  set: (tab) => {
+    uiTabs.value = { ...uiTabs.value, home: tab }
+  }
+})
+
+// 页签切换后卡片节点重建，重新挂载运行中动效
+watch(homeTab, () => nextTick(syncRunAnims), { flush: 'post' })
+
+function openDirTab(tab) {
+  goTab('dir', tab)
+}
 
 const homeRunningCount = computed(() => HOME_BIZ_TYPES.filter((t) => isRunning(t.id)).length)
 
@@ -230,6 +250,10 @@ const bizCards = computed(() =>
       miss: missingDirs(t.id)
     }
   })
+)
+
+const visibleCards = computed(() =>
+  bizCards.value.filter((t) => (homeTab.value === 'ceb' ? t.channelBased : !t.channelBased))
 )
 </script>
 
@@ -269,8 +293,10 @@ const bizCards = computed(() =>
         <span class="mt-0.5 shrink-0 w-4 h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold flex items-center justify-center">!</span>
         <p>
           启动业务前，请确保对应客户端已启动并开启接收回执：货物申报为<strong class="font-semibold">中国国际贸易单一窗口导入客户端</strong>，跨境电商为各渠道<strong class="font-semibold">传输客户端</strong>（如深圳公服）；且本软件
-          <button type="button" class="underline decoration-dotted text-brand-600 hover:text-brand-700" @click="go('dir')">目录配置</button>
-          与对方<strong class="font-semibold">完全一致</strong>。未配齐目录和启动回执，启动业务将无法正常生效。
+          <button type="button" class="underline decoration-dotted text-brand-600 hover:text-brand-700" @click="openDirTab('sw')">目录配置</button>
+          （跨境电商渠道在其中的
+          <button type="button" class="underline decoration-dotted text-brand-600 hover:text-brand-700" @click="openDirTab('ceb')">渠道入口</button>
+          页签）与对方<strong class="font-semibold">完全一致</strong>。未配齐目录和启动回执，启动业务将无法正常生效。
         </p>
       </div>
     </div>
@@ -280,9 +306,17 @@ const bizCards = computed(() =>
         <span class="text-sm font-semibold">业务启动</span>
         <span class="ml-2 text-xs text-slate-400">看按钮与卡片动效即可判断启停</span>
       </div>
+      <div class="px-3 pt-3 flex items-center gap-3">
+        <SegTabs v-model="homeTab" :items="HOME_TABS" />
+        <span v-if="homeTab === 'ceb'" class="min-w-0 truncate text-[11px] text-slate-400">
+          9610 清单 / 9710·9810 前置申报按渠道投递，渠道目录在
+          <button type="button" class="underline decoration-dotted text-brand-600 hover:text-brand-700" @click="openDirTab('ceb')">目录配置 · 渠道入口</button>
+          维护
+        </span>
+      </div>
       <div class="p-3 flex flex-col gap-2.5">
         <div
-          v-for="type in bizCards"
+          v-for="type in visibleCards"
           :key="type.id"
           :ref="(el) => setCardEl(type.id, el)"
           class="relative rounded-xl border transition-all duration-200 overflow-hidden"
