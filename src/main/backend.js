@@ -11,6 +11,8 @@ import { info, warn } from './logger.js'
 // 例行成功的请求不逐条落日志，业务状态与异常在调用方记录。
 
 export const API_PREFIX = '/admin-api/declaration/agent'
+// CEB（跨境电商）接口族：与 DEC 各用各的路径，公共响应/任务字段/状态上报/回执协议一致（CB-AGENT-01）
+export const CEB_API_PREFIX = '/admin-api/declaration/agent/ceb'
 
 export const BIZ_CODE = {
   CHANNEL_CLOSED: 1050000200,
@@ -22,6 +24,8 @@ export const BIZ_CODE = {
   // 以下两个仅平台跨租户模式会出现（跨租户文档 §12）
   HEARTBEAT_TENANT_UNSET: 1050000208, // 后端未配置平台 heartbeat 归属租户
   RECEIPT_TASK_MISMATCH: 1050000209, // 回执 taskId 与 ClientSeqNo 不匹配
+  // CEB 业务校验（实例/令牌/状态冲突、未开通路由等）统一用这个码 + 具体提示
+  CEB_BIZ_REJECTED: 1050004000,
   // 日志上传（《前置机日志文件上传对接文档》§4）
   LOG_CHANNEL_CLOSED: 1050000231, // 服务端未开启日志上传通道，整体拒绝
   LOG_FILE_EMPTY: 1050000232,
@@ -56,10 +60,10 @@ export function missingAccess(cfg) {
   return miss
 }
 
-function buildUrl(cfg, apiPath) {
+function buildUrl(cfg, apiPath, prefix = API_PREFIX) {
   const base = effectiveApiUrl(cfg)
-  // 完整路径 = 基础地址 + /admin-api/declaration/agent + 接口路径；NGINX 按 /admin-api 转发
-  const full = `${API_PREFIX}/${String(apiPath).replace(/^\//, '')}`
+  // 完整路径 = 基础地址 + 接口族前缀 + 接口路径；NGINX 按 /admin-api 转发
+  const full = `${prefix}/${String(apiPath).replace(/^\//, '')}`
   return new URL(full, `${base}/`).toString()
 }
 
@@ -67,8 +71,8 @@ function buildUrl(cfg, apiPath) {
  * 统一发送 + 信封解包。JSON 与 multipart 走同一条路，差别只在请求体形态与请求头。
  * 把后端公共包封成统一结果，避免各处重复判断 HTTP/code。
  */
-async function send(cfg, apiPath, { body, multipart, headers, timeoutMs }, { scope = 'api', label = apiPath } = {}) {
-  const url = buildUrl(cfg, apiPath)
+async function send(cfg, apiPath, { body, multipart, headers, timeoutMs }, { scope = 'api', label = apiPath, prefix } = {}) {
+  const url = buildUrl(cfg, apiPath, prefix)
   const started = Date.now()
   try {
     const res = await requestViaRenderer({
@@ -118,8 +122,8 @@ async function send(cfg, apiPath, { body, multipart, headers, timeoutMs }, { sco
   }
 }
 
-async function post(cfg, apiPath, body, { timeoutMs, scope, label } = {}) {
-  return send(cfg, apiPath, { body, headers: authHeaders(cfg), timeoutMs }, { scope, label })
+async function post(cfg, apiPath, body, { timeoutMs, scope, label, prefix } = {}) {
+  return send(cfg, apiPath, { body, headers: authHeaders(cfg), timeoutMs }, { scope, label, prefix })
 }
 
 /** 后端接口约定的时间格式 yyyy-MM-dd HH:mm:ss：回执的 receivedAt、日志上传的 logTime 都用它 */
@@ -182,6 +186,52 @@ export async function uploadReceipt(cfg, { taskId, fileName, receivedAt, receipt
   if (tradeMode) body.tradeMode = tradeMode
   // 回执可能较大，放宽超时
   return post(cfg, '/receipts', body, { scope: 'receipt', label: `receipt:${fileName}`, timeoutMs: 60_000 })
+}
+
+// ---------- CEB（跨境电商）接口族：复用原 DEC 的公共协议，路径独立（CB-AGENT-01） ----------
+
+/** 每次领取一个路由；tradeModes 省略时后端按该路由全部 9610/9710/9810 任务返回 */
+export async function pullCebTasks(cfg, { route, tradeModes, batchSize } = {}) {
+  const body = {
+    instanceName: cfg.instanceName,
+    route,
+    tradeModes: tradeModes?.length ? tradeModes : undefined,
+    batchSize: batchSize || cfg.batchSize || 5
+  }
+  const res = await post(cfg, '/tasks/pull', body, { scope: 'pull', label: `ceb-pull:${route}`, prefix: CEB_API_PREFIX })
+  if (!res.ok) return res
+  const tasks = Array.isArray(res.data?.tasks) ? res.data.tasks : []
+  if (tasks.length) info(`本轮拉取到 ${tasks.length} 条 CEB 任务（${route}）`, 'pull')
+  return { ...res, tasks }
+}
+
+export async function reportCebTaskStatus(cfg, taskId, { dispatchToken, status, message }) {
+  const body = {
+    instanceName: cfg.instanceName,
+    dispatchToken,
+    status,
+    message: String(message || '').slice(0, 500)
+  }
+  const res = await post(cfg, `/tasks/${taskId}/status`, body, { scope: 'deliver', label: `ceb-status#${taskId}`, prefix: CEB_API_PREFIX })
+  if (res.code === BIZ_CODE.TASK_NOT_FOUND || res.code === BIZ_CODE.STATUS_CONFLICT || res.code === BIZ_CODE.CEB_BIZ_REJECTED) {
+    warn(`CEB 状态回报被拒绝 taskId=${taskId} code=${res.code} ${res.msg}`, 'deliver')
+  }
+  return res
+}
+
+/**
+ * CEB 回执上传：额外带 route；taskId/tradeMode 仅在能可靠识别时提供——
+ * 深圳公服回执文件名与原报文的对应关系现场未确认，统一不带，由后端按回执 XML 内容匹配。
+ */
+export async function uploadCebReceipt(cfg, { route, fileName, receivedAt, receiptXmlBase64 }) {
+  const body = {
+    instanceName: cfg.instanceName,
+    route,
+    fileName,
+    receivedAt,
+    receiptXmlBase64
+  }
+  return post(cfg, '/receipts', body, { scope: 'receipt', label: `ceb-receipt:${fileName}`, prefix: CEB_API_PREFIX, timeoutMs: 60_000 })
 }
 
 export async function sendHeartbeat(cfg, payload) {

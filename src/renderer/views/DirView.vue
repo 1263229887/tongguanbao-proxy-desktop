@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { config, saveConfig } from '../store.js'
 import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs, emptyBizDir } from '../../shared/biz-types.js'
+import CebChannelEditor from '../components/CebChannelEditor.vue'
 
 const TASKS_MIN = 1
 const TASKS_MAX = 5
@@ -21,6 +22,8 @@ const importResult = ref(null)
 function cloneBizDirs(src) {
   const next = {}
   for (const type of BUSINESS_TYPES) {
+    // 渠道型业务（跨境电商）的目录在 cebChannels 里，由 CebChannelEditor 单独管理，不进 bizDirs
+    if (type.channelBased) continue
     next[type.id] = { ...emptyBizDir(), ...(src?.[type.id] ?? {}) }
   }
   return next
@@ -33,7 +36,9 @@ watch(
     form.value = { bizDirs: cloneBizDirs(val.bizDirs) }
     if (val.swImportBasePath) importPath.value = val.swImportBasePath
     const open = {}
-    const filled = BUSINESS_TYPES.filter((t) => countFilledDirs(val.bizDirs?.[t.id]) > 0)
+    const filled = BUSINESS_TYPES.filter((t) =>
+      t.channelBased ? (val.cebChannels || []).length > 0 : countFilledDirs(val.bizDirs?.[t.id]) > 0
+    )
     if (filled.length) for (const t of filled) open[t.id] = true
     else open[BUSINESS_TYPES[0].id] = true
     expanded.value = open
@@ -47,6 +52,13 @@ onBeforeUnmount(() => {
 
 const openCount = computed(() => Object.values(expanded.value).filter(Boolean).length)
 const bizById = Object.fromEntries(BUSINESS_TYPES.map((t) => [t.id, t]))
+
+// 分组折叠条上的摘要：渠道型业务报渠道数，其余报目录填充数与并发
+function groupSummary(type) {
+  if (type.channelBased) return `渠道 ${(config.value?.cebChannels || []).length} 个`
+  const entry = form.value?.bizDirs?.[type.id]
+  return `目录 ${countFilledDirs(entry)}/${DIR_FIELDS.length} · 并发 ${entry?.maxConcurrentTasks ?? '—'}`
+}
 
 function toggle(typeId) {
   expanded.value = { ...expanded.value, [typeId]: !expanded.value[typeId] }
@@ -268,7 +280,7 @@ const NOTICE_TONE = {
             <span v-if="type.subtitle !== type.title" class="text-xs text-slate-400">{{ type.subtitle }}</span>
           </div>
           <span class="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
-            目录 {{ countFilledDirs(form.bizDirs[type.id]) }}/{{ DIR_FIELDS.length }} · 并发 {{ form.bizDirs[type.id].maxConcurrentTasks }}
+            {{ groupSummary(type) }}
           </span>
           <span v-if="savingKeys[type.id]" class="shrink-0 text-[11px] text-brand-600">保存中…</span>
           <svg
@@ -289,7 +301,9 @@ const NOTICE_TONE = {
             <span>{{ type.subtitle }}</span>
           </div>
 
-          <div class="flex flex-col gap-4 lg:flex-row lg:items-center">
+          <CebChannelEditor v-if="type.channelBased" />
+
+          <div v-else class="flex flex-col gap-4 lg:flex-row lg:items-center">
             <div class="flex-1 min-w-0 flex flex-col gap-3">
               <div v-for="field in DIR_FIELDS" :key="field.key">
                 <div class="label-text mb-1">{{ field.label }}</div>

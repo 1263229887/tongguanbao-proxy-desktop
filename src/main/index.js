@@ -8,6 +8,8 @@ import { closeLedger, initLedger } from './ledger.js'
 import { flushNow as flushLogs, reportAnomaly, start as startLogUpload, stop as stopLogUpload } from './log-upload.js'
 import { beginShutdown, markCleanExit, markRunning, setupCrashGuard } from './crash-guard.js'
 import { onStateChange as onPollState, resume as resumePoller, runNow as runPollerOnce, stop as stopPoller } from './poller.js'
+import { ensureAgentHeartbeat, releaseAgentHeartbeat } from './agent.js'
+import { onCebStateChange, resumeCebAgent, runCebOnce, setCebHeartbeatHooks, stopCebAgent } from './ceb-agent.js'
 import { createTray, destroyTray } from './tray.js'
 import { APP_ENV } from './env.js'
 import { onUpdateState, setupUpdater, stopUpdater } from './updater.js'
@@ -269,7 +271,11 @@ async function bootstrap() {
 
   subscribe((entry) => broadcast('log:entry', entry))
   onPollState((state) => broadcast('poll:state', state))
+  onCebStateChange((state) => broadcast('ceb:state', state))
   onUpdateState((state) => broadcast('update:state', state))
+
+  // 心跳由 DEC 侧统一持有；CEB 引擎启停时经这对 hooks 申请/释放，任一引擎运行即保活
+  setCebHeartbeatHooks({ ensure: ensureAgentHeartbeat, release: releaseAgentHeartbeat })
 
   registerIpc({
     onConfigSaved: async (next) => {
@@ -278,6 +284,7 @@ async function bootstrap() {
       applyKeepAwake(next.keepAwake !== false)
       applyDisplayAwake(next.keepDisplayAwake === true)
       await resumePoller()
+      await resumeCebAgent()
       // 换密钥/换地址后，此前因鉴权或通道被拒的日志重新尝试一次
       await startLogUpload({ resetTerminal: true })
     }
@@ -298,6 +305,7 @@ async function bootstrap() {
     keepDisplayAwake: cfg.keepDisplayAwake === true,
     resume: () => {
       void runPollerOnce()
+      void runCebOnce()
       void flushLogs()
     }
   })
@@ -353,6 +361,7 @@ if (!app.requestSingleInstanceLock()) {
     quitSettled = true
     e.preventDefault()
     stopPoller()
+    stopCebAgent()
     stopLogUpload()
     withTimeout(flushLogs(), QUIT_FLUSH_TIMEOUT_MS, '退出前上传日志超时')
       .catch((err) => warn(`退出前上传日志未完成：${err.message}`, 'upload'))

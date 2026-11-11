@@ -10,6 +10,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { app } from 'electron'
 import { getAgentState, getRunningBizTypes, stopAgent, waitIdle } from './agent.js'
+import { getCebState, stopCebAgent, waitCebIdle } from './ceb-agent.js'
 import { APP_ENV } from './env.js'
 import { flushNow as flushLogs, suppressNextExitFlush } from './log-upload.js'
 import { debug, error, info, warn } from './logger.js'
@@ -277,6 +278,10 @@ export async function quitAndInstall() {
     if (getAgentState().running) {
       stopAgent()
       await waitIdle(IDLE_WAIT_MS)
+    }
+    if (getCebState().running) {
+      stopCebAgent()
+      await waitCebIdle(IDLE_WAIT_MS)
     }
   } catch (e) {
     warn(`安装前收尾代理任务异常：${e?.message ?? e}`, 'update')

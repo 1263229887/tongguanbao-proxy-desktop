@@ -28,6 +28,20 @@ export const pollState = ref({
 export const logs = ref([])
 export const logFiles = ref([])
 export const logDir = ref('')
+// 跨境电商引擎状态：与 pollState（货物申报）各自独立，首页卡片与启停按钮分别对齐
+export const cebState = ref({
+  polling: false,
+  running: false,
+  enabled: false,
+  connected: null,
+  processed: 0,
+  delivered: 0,
+  receipts: 0,
+  lastTickAt: null,
+  lastError: null,
+  tickCount: 0,
+  instanceName: ''
+})
 export const autoStart = ref({ openAtLogin: false, willLaunch: false, managed: false })
 export const updateState = ref({
   status: 'idle',
@@ -77,11 +91,13 @@ export async function initStore() {
   meta.value = await window.intake.getMeta()
   config.value = await window.intake.getConfig()
   pollState.value = await window.intake.getPollState()
+  cebState.value = await window.intake.getCebState()
   autoStart.value = await window.intake.getAutoStart()
   updateState.value = await window.intake.getUpdateState()
   await refreshLogs()
 
   window.intake.onPollState((next) => (pollState.value = next))
+  window.intake.onCebState((next) => (cebState.value = next))
   window.intake.onUpdateState((next) => (updateState.value = next))
   window.intake.onLogEntry((entry) => {
     logs.value = [...logs.value, entry].slice(-500)

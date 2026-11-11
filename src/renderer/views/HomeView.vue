@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from '../vendor/gsap.min.js'
 import StatusTile from '../components/StatusTile.vue'
-import { config, go, meta, pollState, updateState } from '../store.js'
-import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs } from '../../shared/biz-types.js'
+import { config, go, meta, pollState, cebState, updateState } from '../store.js'
+import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs, cebChannelReady } from '../../shared/biz-types.js'
 import { bizRun, isRunning, missingDirs, startBiz, stopBiz } from '../biz-run.js'
 
 // 主进程代理状态与首页「货物申报」卡片对齐
@@ -18,9 +18,21 @@ watch(
   { immediate: true }
 )
 
+// 跨境电商引擎独立状态，与「跨境电商申报」卡片对齐
+watch(
+  () => [cebState.value.running, cebState.value.enabled],
+  ([running, enabled]) => {
+    const on = !!(running || enabled)
+    bizRun.ceb.running = on
+    if (on && !bizRun.ceb.startedAt) bizRun.ceb.startedAt = Date.now()
+    if (!on) bizRun.ceb.startedAt = null
+  },
+  { immediate: true }
+)
+
 const GUIDE = [
   { view: 'access', label: '权限配置', desc: '填写企业鉴权密钥（sk-…），可点眼睛图标显示/隐藏。开发/测试包可维护多组服务器地址 + 密钥并互切；生产包地址已内置，只需配密钥。保存后可点「测试访问」确认能否连通。' },
-  { view: 'dir', label: '目录配置', desc: '货物申报请配置统一 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入。目录必须与对方完全一致。' },
+  { view: 'dir', label: '目录配置', desc: '货物申报请配置统一 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入；跨境电商请按渠道添加发送 / 接收目录（每个渠道对应一个独立传输客户端，如深圳公服）。目录必须与对方完全一致。' },
   { view: 'param', label: '参数配置', desc: '轮询间隔、回执/心跳间隔、开机自动启动、日志保留。本地开发可打开调试控制台查看 Network。' },
   { view: 'about', label: '关于与后台运行', desc: '在「关于」可查看版本信息。关闭主窗口后程序仍在后台；彻底退出请在托盘图标上右键。生产环境可用 Ctrl+Shift+I 打开调试台。' }
 ]
@@ -195,6 +207,19 @@ const homeRunningCount = computed(() => HOME_BIZ_TYPES.filter((t) => isRunning(t
 
 const bizCards = computed(() =>
   HOME_BIZ_TYPES.map((t) => {
+    // 渠道型业务（跨境电商）按「启用渠道」统计就绪数，而非 bizDirs 四目录
+    if (t.channelBased) {
+      const channels = (config.value?.cebChannels || []).filter((c) => c && c.enabled !== false)
+      const ready = channels.filter(cebChannelReady).length
+      return {
+        ...t,
+        filled: ready,
+        total: channels.length,
+        tasks: '—',
+        running: isRunning(t.id),
+        miss: missingDirs(t.id)
+      }
+    }
     const entry = config.value?.bizDirs?.[t.id]
     return {
       ...t,
@@ -243,7 +268,7 @@ const bizCards = computed(() =>
       <div class="flex items-start gap-2 text-xs leading-relaxed text-amber-800">
         <span class="mt-0.5 shrink-0 w-4 h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold flex items-center justify-center">!</span>
         <p>
-          启动业务前，请确保<strong class="font-semibold">中国国际贸易单一窗口导入客户端</strong>中对应业务与「接收回执」均已启动，且本软件
+          启动业务前，请确保对应客户端已启动并开启接收回执：货物申报为<strong class="font-semibold">中国国际贸易单一窗口导入客户端</strong>，跨境电商为各渠道<strong class="font-semibold">传输客户端</strong>（如深圳公服）；且本软件
           <button type="button" class="underline decoration-dotted text-brand-600 hover:text-brand-700" @click="go('dir')">目录配置</button>
           与对方<strong class="font-semibold">完全一致</strong>。未配齐目录和启动回执，启动业务将无法正常生效。
         </p>
@@ -274,10 +299,10 @@ const bizCards = computed(() =>
                 <span v-if="type.subtitle !== type.title" class="text-xs text-slate-400">{{ type.subtitle }}</span>
               </div>
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                <span :class="type.filled === type.total ? 'text-brand-600' : 'text-amber-600'">
-                  目录 {{ type.filled }}/{{ type.total }}
+                <span :class="type.total > 0 && type.filled === type.total ? 'text-brand-600' : 'text-amber-600'">
+                  {{ type.channelBased ? '渠道' : '目录' }} {{ type.filled }}/{{ type.total }}
                 </span>
-                <span>并发 {{ type.tasks }}</span>
+                <span v-if="!type.channelBased">并发 {{ type.tasks }}</span>
                 <span v-if="type.miss.length" class="text-amber-700 truncate max-w-[220px]" :title="type.miss.join('、')">
                   缺：{{ type.miss.join('、') }}
                 </span>

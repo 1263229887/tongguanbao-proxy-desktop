@@ -6,7 +6,7 @@ import crypto from 'node:crypto'
 import { execSync } from 'node:child_process'
 import { app } from 'electron'
 import { CAN_EDIT_SERVER } from './env.js'
-import { BUSINESS_TYPES, emptyBizDir } from '../shared/biz-types.js'
+import { BUSINESS_TYPES, CEB_ROUTE_IDS, emptyBizDir, emptyCebChannel } from '../shared/biz-types.js'
 
 // 生产包地址写死在程序里，界面不可改；测试/开发未填地址时走测试兜底。
 export const PROD_API_URL = 'https://www.astongai.com'
@@ -25,7 +25,10 @@ const DEFAULTS = {
   inboxIntervalSeconds: 3,
   heartbeatIntervalSeconds: 30,
   batchSize: 5,
-  tradeModes: ['export', 'import', '9610'],
+  // 9710/9810 的报关单暂存复用原 DEC 链路（货物申报目录），拉取范围须显式包含（CB-AGENT-01）
+  tradeModes: ['export', 'import', '9610', '9710', '9810'],
+  // 跨境电商渠道：每个渠道对应现场一个独立传输客户端及其收发目录，按报文 dxpId 匹配
+  cebChannels: [],
   logKeepDays: 30,
   // 写盘日志级别：界面不再暴露，恒为 info；异常期由 log-upload.js 的智能调节临时升到 debug
   logLevel: 'info',
@@ -105,7 +108,7 @@ export function defaultInstanceName() {
 }
 
 function normalizeTradeModes(src) {
-  const allowed = new Set(['export', 'import', '9610'])
+  const allowed = new Set(['export', 'import', '9610', '9710', '9810'])
   const list = Array.isArray(src) ? src.map(str).filter((x) => allowed.has(x)) : []
   return list.length ? list : [...DEFAULTS.tradeModes]
 }
@@ -152,10 +155,38 @@ function normalizeBizDirs(raw) {
   const source = raw.bizDirs && typeof raw.bizDirs === 'object' ? raw.bizDirs : {}
   const result = {}
   for (const type of BUSINESS_TYPES) {
+    // 渠道制业务（跨境电商 CEB）不用四目录组，配置在 cebChannels
+    if (type.channelBased) continue
     const src = source[type.id]
     result[type.id] = src ? normalizeBizDir(src, DEFAULTS.maxConcurrentTasks) : type.id === 'goods' ? legacy : emptyBizDir()
   }
   return result
+}
+
+function normalizeCebChannels(raw) {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set()
+  const out = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const base = emptyCebChannel()
+    let id = str(item.id)
+    if (!id || seen.has(id)) id = crypto.randomUUID()
+    seen.add(id)
+    out.push({
+      ...base,
+      id,
+      name: str(item.name),
+      route: CEB_ROUTE_IDS.includes(item.route) ? item.route : base.route,
+      dxpId: str(item.dxpId),
+      sendDir: str(item.sendDir),
+      receiveDir: str(item.receiveDir),
+      bakDir: str(item.bakDir),
+      errDir: str(item.errDir),
+      enabled: item.enabled !== false
+    })
+  }
+  return out
 }
 
 function normalize(raw) {
@@ -176,6 +207,7 @@ function normalize(raw) {
       : [normalizeProfile({ tag: '', apiUrl: PROD_API_URL, agentKey })],
     activeProfile,
     bizDirs: normalizeBizDirs(raw),
+    cebChannels: normalizeCebChannels(raw.cebChannels),
     maxConcurrentTasks: clampInt(raw.maxConcurrentTasks, 1, 5, DEFAULTS.maxConcurrentTasks),
     pollIntervalSeconds: clampInt(raw.pollIntervalSeconds, 1, 86_400, DEFAULTS.pollIntervalSeconds),
     inboxIntervalSeconds: clampInt(raw.inboxIntervalSeconds, 1, 3600, DEFAULTS.inboxIntervalSeconds),

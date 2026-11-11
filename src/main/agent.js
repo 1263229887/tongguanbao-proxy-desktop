@@ -31,6 +31,9 @@ import { debug, error, info, warn } from './logger.js'
 import { clearCrashNote, getCrashNote } from './crash-guard.js'
 import { getUploadError, reportAnomaly } from './log-upload.js'
 import { deliveredWithoutReceipt } from './ledger.js'
+import { setLinkPatch } from './link-state.js'
+import { getCebDirHealth, getCebState, isCebRunning } from './ceb-agent.js'
+import { cebPendingTaskCount } from './ledger.js'
 
 // 真实代理引擎（文档 v1.4）：拉取 DECCUS001 → 原子写 OutBox → 回报状态 → 轮询 InBox 上传回执 → 心跳。
 // clientSeqNo 为申报轮次标识：同 taskId 新轮次正常投递，账本按 taskId+clientSeqNo+xmlSha256 三段键记录。
@@ -50,7 +53,8 @@ import { deliveredWithoutReceipt } from './ledger.js'
 const BIZ = {
   bizType: 'goods', // 参数配置里的业务目录组 id
   moduleCode: 'DECCUS001', // 后端 businessModuleCode 白名单（货物申报/报关单暂存）
-  tradeModes: ['export', 'import', '9610'] // 本模块允许拉取的任务分类
+  // 9710/9810 的报关单暂存复用本 DEC 链路（CB-AGENT-01：支持该业务的实例须显式加入）
+  tradeModes: ['export', 'import', '9610', '9710', '9810'] // 本模块允许拉取的任务分类
 }
 
 const state = {
@@ -105,6 +109,10 @@ function noteNetUp() {
 
 function patch(values) {
   Object.assign(state, values)
+  // 连接级事实镜像到 link-state，供 CEB 引擎门禁与租约判断共享（同一把密钥/同一个通道）
+  if ('authFailed' in values || 'channelClosed' in values || 'clockOffsetMs' in values) {
+    setLinkPatch({ authFailed: !!state.authFailed, channelClosed: !!state.channelClosed, clockOffsetMs: state.clockOffsetMs || 0 })
+  }
   broadcast({ ...state })
   return { ...state }
 }
@@ -119,7 +127,10 @@ export function getAgentState() {
 
 /** 当前真正在运行的业务模块 id（在线升级前记录、升级后询问是否恢复用） */
 export function getRunningBizTypes() {
-  return state.running ? [BIZ.bizType] : []
+  const list = []
+  if (state.running) list.push(BIZ.bizType)
+  if (isCebRunning()) list.push('ceb')
+  return list
 }
 
 function goodsDirs(cfg) {
@@ -567,7 +578,7 @@ function backoffMs(retryCount) {
  * 崩溃与日志上传的异常不在 state 里，所以这里现取。
  */
 function heartbeatLastError() {
-  return state.lastError || getCrashNote() || getUploadError() || ''
+  return state.lastError || getCebState().lastError || getCrashNote() || getUploadError() || ''
 }
 
 /**
@@ -791,7 +802,8 @@ async function tickInbox() {
 }
 
 async function tickHeartbeat() {
-  if (heartbeatBusy || !state.enabled) return
+  // 心跳由 DEC 侧统一持有，但任一引擎运行都要保活：只开跨境电商时也要上报在线与时钟
+  if (heartbeatBusy || (!state.enabled && !isCebRunning())) return
   const cfg = await loadConfig()
   const miss = missingAccess(cfg)
   if (miss.length) return
@@ -814,15 +826,19 @@ async function tickHeartbeat() {
       }
     } catch {}
 
+    // CEB 各路由渠道目录健康一并上报（tradeMode 字段仅展示，填路由标识）
+    const cebHealth = await getCebDirHealth()
+    const decConfigured = !!(dirs.outBox || dirs.inBox)
+    const healthy = (!decConfigured || (outboxOk && inboxOk)) && cebHealth.every((h) => h.outboxOk && h.inboxOk)
+
     const res = await sendHeartbeat(cfg, {
       version: app.getVersion(),
       ip: Object.values(os.networkInterfaces())
         .flat()
         .filter((n) => n && n.family === 'IPv4' && !n.internal)
         .map((n) => n.address)[0] || '',
-      outboxOk,
-      inboxOk,
-      pendingTaskCount: pendingTaskCount(),
+      tradeModes: [{ tradeMode: 'shared', outboxOk, inboxOk }, ...cebHealth],
+      pendingTaskCount: pendingTaskCount() + cebPendingTaskCount(),
       lastError: heartbeatLastError()
     })
 
@@ -856,7 +872,8 @@ async function tickHeartbeat() {
     if (nowText) {
       const serverTs = parseDateTime(nowText)
       if (serverTs != null) {
-        state.clockOffsetMs = serverTs - Date.now()
+        // 经 patch 镜像到 link-state：CEB 租约判断与本引擎共用同一时钟偏移
+        patch({ clockOffsetMs: serverTs - Date.now() })
         // 时钟偏移属异常才告警（租约判断依赖时钟），恢复正常自动解除
         const skewed = Math.abs(state.clockOffsetMs) > 120_000
         if (skewed && !clockOffsetWarned) {
@@ -877,7 +894,7 @@ async function tickHeartbeat() {
       authFailed: false,
       channelClosed: false,
       lastHeartbeatAt: Date.now(),
-      lastError: outboxOk && inboxOk ? null : state.lastError
+      lastError: healthy ? null : state.lastError
     })
   } catch (e) {
     warn(`心跳异常：${e.message}`, 'heartbeat')
@@ -888,10 +905,29 @@ async function tickHeartbeat() {
 }
 
 function clearTimers() {
-  for (const t of [taskTimer, inboxTimer, heartbeatTimer]) {
+  for (const t of [taskTimer, inboxTimer]) {
     if (t) clearInterval(t)
   }
-  taskTimer = inboxTimer = heartbeatTimer = null
+  taskTimer = inboxTimer = null
+}
+
+// 心跳定时器两引擎共享：DEC 停了但跨境电商还在跑（或反之）时心跳不能跟着停。
+// ensure/release 由各引擎启停时调用（CEB 经注入 hooks），release 只在两边都停了才真正清除。
+export async function ensureAgentHeartbeat() {
+  if (heartbeatTimer) return
+  const cfg = await loadConfig()
+  // await 期间另一引擎可能已建好定时器，二次检查防重复
+  if (heartbeatTimer) return
+  heartbeatTimer = setInterval(tickHeartbeat, Math.max(10, cfg.heartbeatIntervalSeconds) * 1000)
+  void tickHeartbeat()
+}
+
+export function releaseAgentHeartbeat() {
+  if (state.enabled || isCebRunning()) return
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+    heartbeatTimer = null
+  }
 }
 
 export async function startAgent() {
@@ -922,11 +958,11 @@ export async function startAgent() {
   // 启动立刻跑一轮，避免干等定时器
   void tickTasks()
   void tickInbox()
-  void tickHeartbeat()
+  // 心跳可能已由 CEB 引擎保活中，ensure 幂等：已有定时器则沿用，不重复建
+  await ensureAgentHeartbeat()
 
   taskTimer = setInterval(tickTasks, Math.max(1, cfg.pollIntervalSeconds) * 1000)
   inboxTimer = setInterval(tickInbox, Math.max(1, cfg.inboxIntervalSeconds) * 1000)
-  heartbeatTimer = setInterval(tickHeartbeat, Math.max(10, cfg.heartbeatIntervalSeconds) * 1000)
 
   return getAgentState()
 }
@@ -934,6 +970,7 @@ export async function startAgent() {
 export function stopAgent() {
   state.enabled = false
   clearTimers()
+  releaseAgentHeartbeat()
   info('代理已停止', 'agent')
   return patch({ running: false, polling: false })
 }
@@ -949,6 +986,7 @@ export async function waitIdle(timeoutMs = 30_000) {
 export async function resumeAgent() {
   if (!state.enabled) {
     clearTimers()
+    releaseAgentHeartbeat()
     return patch({ running: false, polling: false })
   }
   return startAgent()

@@ -19,9 +19,10 @@ const PLATFORMS = {
 
 // 在线更新 feed（对接文档 §8），按环境写进包内 app-update.yml；
 // 运行时 updater.js 仍会 setFeedURL 按 appEnv 兜底覆盖
+// 生产 feed 是站点根：运维把 update.zip 解压后 latest.yml 直接放在 /astongai/ 下
 const UPDATE_FEED = {
   test: 'http://192.168.200.1:48080/agent-update/',
-  prod: 'https://www.danaai.net/astongai/agent-update/'
+  prod: 'https://www.danaai.net/astongai/'
 }
 
 function flag(argv, name) {
@@ -72,17 +73,17 @@ function toolCmd(kind) {
   return { cmd: 'npx', args: [] }
 }
 
-// 每次打包前彻底清空产物根目录，避免旧包和新包混在一起
-function cleanOutRoot(dryRun) {
-  if (!fs.existsSync(OUT_ROOT)) {
-    console.log('产物目录不存在，跳过清理')
-    return
-  }
-  const top = fs.readdirSync(OUT_ROOT)
-  console.log(dryRun ? `将删除 ${path.relative(ROOT, OUT_ROOT)}/ 下的 ${top.length} 项：` : `已删除 ${path.relative(ROOT, OUT_ROOT)}/ 下的 ${top.length} 项：`)
-  for (const name of top) {
-    console.log(`  - ${name}`)
-    if (!dryRun) fs.rmSync(path.join(OUT_ROOT, name), { recursive: true, force: true })
+// 只清本次要产出的 env + platform 目录，test / prod 的产物互不干扰
+// （此前清空整个 release/，打另一个环境的包时会把已打好的包一起删掉）
+function cleanTargets(platforms, dryRun) {
+  const targets = platforms.flatMap((key) => {
+    const dir = PLATFORMS[key].dir
+    return [path.join(OUT_ROOT, env, dir), path.join(OUT_ROOT, '.tmp', dir)]
+  })
+  for (const dir of targets) {
+    if (!fs.existsSync(dir)) continue
+    console.log(dryRun ? `将删除 ${path.relative(ROOT, dir)}` : `已删除 ${path.relative(ROOT, dir)}`)
+    if (!dryRun) fs.rmSync(dir, { recursive: true, force: true })
   }
 }
 
@@ -125,7 +126,7 @@ if (pkgVersion === '0.1.0') {
   console.log('⚠ 当前 package.json version 还是 0.1.0：客户端按版本号判断更新，正式发版前请先提升版本号\n')
 }
 
-cleanOutRoot(dryRun)
+cleanTargets(platforms, dryRun)
 
 console.log('\n[1] 构建渲染层')
 {
@@ -193,6 +194,12 @@ for (const [i, key] of platforms.entries()) {
   for (const item of items) console.log(`    ${item.dir ? '📁' : '·'} ${item.name}`)
 }
 
-if (!dryRun) fs.rmSync(path.join(OUT_ROOT, '.tmp'), { recursive: true, force: true })
+if (!dryRun) {
+  for (const key of platforms) fs.rmSync(path.join(OUT_ROOT, '.tmp', PLATFORMS[key].dir), { recursive: true, force: true })
+  // 只删空目录：另一个环境若在并发打包，保留它的 .tmp
+  try {
+    fs.rmdirSync(path.join(OUT_ROOT, '.tmp'))
+  } catch {}
+}
 
 console.log(`\n打包完成 · 总耗时 ${elapsed(Date.now() - startedAt)}\n`)

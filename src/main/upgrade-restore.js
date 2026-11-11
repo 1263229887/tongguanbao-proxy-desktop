@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { loadConfig } from './config.js'
-import { BUSINESS_TYPES, DIR_FIELDS } from '../shared/biz-types.js'
+import { BUSINESS_TYPES, DIR_FIELDS, cebChannelReady } from '../shared/biz-types.js'
 import { debug, getLogDir, info, warn } from './logger.js'
 
 const FILE_NAME = 'pending-biz-restore.json'
@@ -207,6 +207,15 @@ export async function readPendingBusinessRestore() {
   for (const id of Array.isArray(raw?.bizTypes) ? raw.bizTypes : []) {
     const type = BUSINESS_TYPES.find((t) => t.id === id)
     if (!type) continue
+    // 渠道型业务（跨境电商）没有 bizDirs 组：只要有一个启用且收发目录齐全的渠道就算可恢复
+    if (type.channelBased) {
+      if (!(cfg.cebChannels || []).some(cebChannelReady)) {
+        skipped.push(type.title)
+        continue
+      }
+      items.push({ id, title: type.title })
+      continue
+    }
     const entry = cfg.bizDirs?.[id]
     const missing = DIR_FIELDS.filter((d) => !String(entry?.[d.key] || '').trim())
     if (missing.length) {

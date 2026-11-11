@@ -3,6 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { read as readAutoStart } from './autostart.js'
 import { testConnection } from './backend.js'
 import { getAgentState, runAgentOnce, startAgent, stopAgent } from './agent.js'
+import { getCebState, runCebOnce, startCebAgent, stopCebAgent } from './ceb-agent.js'
 import { setupNetBridge } from './net-bridge.js'
 import { APP_ENV } from './env.js'
 import { checkDir, loadConfig, saveConfig } from './config.js'
@@ -70,6 +71,10 @@ export function registerIpc({ onConfigSaved } = {}) {
   ipcMain.handle('agent:stop', () => stopAgent())
   ipcMain.handle('agent:run', () => runAgentOnce())
   ipcMain.handle('agent:state', () => getAgentState())
+  ipcMain.handle('ceb:start', () => startCebAgent())
+  ipcMain.handle('ceb:stop', () => stopCebAgent())
+  ipcMain.handle('ceb:run', () => runCebOnce())
+  ipcMain.handle('ceb:state', () => getCebState())
 
   ipcMain.handle('logs:get', () => getLogs())
   ipcMain.handle('logs:clear', () => clearLogs())

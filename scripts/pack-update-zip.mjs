@@ -1,5 +1,6 @@
 // 把 release/<env>/win-x64 下 electron-builder 的安装产物压成可直接上传的 zip（文件平铺）。
-// 产物固定为：xxx-Setup-<version>.exe / .exe.blockmap / latest.yml。
+// zip 名为 <包名>-<版本>-<env>-update.zip，内含 xxx-Setup.exe / .exe.blockmap / latest.yml；
+// 安装包文件名固定、解压后同名覆盖，版本由 zip 名区分。
 // 用法：node scripts/pack-update-zip.mjs <test|prod>
 // 打完用开发模式左下角「更新包上传」选择该 zip 投放即可。
 import fs from 'node:fs'
@@ -53,20 +54,25 @@ if (version === '0.1.0') {
 
 const outDir = path.join(ROOT, 'release', 'update-zip', env)
 fs.mkdirSync(outDir, { recursive: true })
-// 每次生成前清掉该环境目录里的旧 zip，避免本地越积越多（build.mjs 打包时也会清整个 release/）
+// 每次生成前清掉该环境目录里的旧 zip，避免本地越积越多（只动当前 env 目录，不影响另一个环境）
 for (const old of fs.readdirSync(outDir)) {
   if (old.endsWith('.zip')) fs.rmSync(path.join(outDir, old), { force: true })
 }
-// 固定 zip 名：每次同名覆盖（安装包文件名本身也不带版本号，服务端同名覆盖、不留历史）
-const outZip = path.join(outDir, 'update.zip')
+const pkgName = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).name
+const outZip = path.join(outDir, `${pkgName}-${version}-${env}-update.zip`)
 fs.rmSync(outZip, { force: true })
 
-// Compress-Archive 传文件列表时 entry 平铺在 zip 根，符合投放约定
-const list = files.map((n) => `'${path.join(srcDir, n)}'`).join(',')
-const cmd = `Compress-Archive -Path ${list} -DestinationPath '${outZip}' -Force`
-const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd], { stdio: 'inherit', shell: false })
-if (res.status !== 0 || !fs.existsSync(outZip)) {
-  console.error('压缩失败：需要 Windows PowerShell 5+（Compress-Archive）')
+// 文件列表平铺在 zip 根，符合投放约定；Windows 用 Compress-Archive，macOS/Linux 用 zip -j
+let res
+if (process.platform === 'win32') {
+  const list = files.map((n) => `'${path.join(srcDir, n)}'`).join(',')
+  const cmd = `Compress-Archive -Path ${list} -DestinationPath '${outZip}' -Force`
+  res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd], { stdio: 'inherit', shell: false })
+} else {
+  res = spawnSync('zip', ['-j', '-q', outZip, ...files.map((n) => path.join(srcDir, n))], { stdio: 'inherit', shell: false })
+}
+if (res.error || res.status !== 0 || !fs.existsSync(outZip)) {
+  console.error('压缩失败：Windows 需要 PowerShell 5+（Compress-Archive），macOS/Linux 需要 zip 命令')
   process.exit(1)
 }
 

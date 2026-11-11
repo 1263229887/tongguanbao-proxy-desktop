@@ -54,5 +54,5 @@ nsis:
 # 本地构建 publish 策略为 never，这里的配置只影响生成的 app-update.yml，不会上传任何东西。
 publish:
   provider: generic
-  url: https://www.danaai.net/astongai/agent-update/
+  url: https://www.danaai.net/astongai/
   useMultipleRangeRequest: false

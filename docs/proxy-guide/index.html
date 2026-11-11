@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代理机是怎么干活的 · 通关宝前置机说明</title>
+<style>
+  :root {
+    --ink: #0f172a;
+    --ink-2: #475569;
+    --ink-3: #64748b;
+    --line: #e2e8f0;
+    --line-2: #cbd5e1;
+    --bg: #f7f9fc;
+    --bg-72: rgba(247, 249, 252, .72);
+    --surface: #ffffff;
+    --brand: #2f6fed;
+    --brand-weak: #eef4ff;
+    --brand-edge: #c7dbff;
+    --amber: #b45309;
+    --amber-weak: #fffbeb;
+    --rose: #be123c;
+    --ease-out: cubic-bezier(.32, .72, 0, 1);
+    --ease-in: cubic-bezier(.66, 0, 1, 1);
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 16px; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    /* 行长相位：正文 0.9375rem，行长下面用 ch 收；标题用负字距收紧 */
+    font: 0.9375rem/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-optical-sizing: auto;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  /* 行长控制在可读范围；画布内文字（.pg-text）不受影响 */
+  .wrap p:not(.pg-text), .wrap li { max-width: 74ch; }
+  p { margin: .5rem 0; text-wrap: pretty; }
+  h1, h2, h3 { font-weight: 600; }
+  h1 {
+    font-size: clamp(1.45rem, 1.12rem + 1.1vw, 1.75rem);
+    line-height: 1.15;
+    letter-spacing: -0.022em;
+    text-wrap: balance;
+    margin: 0 0 .5rem;
+  }
+  h1 small { display: block; font-size: 0.9375rem; font-weight: 400; letter-spacing: 0; color: var(--ink-3); margin-top: .375rem; line-height: 1.5; }
+  header.hd { border-bottom: 1px solid var(--line); padding-bottom: 1.125rem; margin-bottom: 1.25rem; }
+  .meta-line { font-size: 0.8125rem; color: var(--ink-3); }
+  .meta-line b { color: var(--ink-2); font-weight: 500; }
+  h2 {
+    font-size: 1.1875rem;
+    line-height: 1.35;
+    letter-spacing: -0.011em;
+    text-wrap: balance;
+    margin: 2.5rem 0 .375rem;
+    padding-top: 1.375rem;
+    border-top: 1px solid var(--line);
+    scroll-margin-top: 4.25rem;
+  }
+  h2 .no { display: inline-block; min-width: 22px; color: var(--brand); }
+  h3 { font-size: 1rem; line-height: 1.4; letter-spacing: -0.005em; margin: 1.375rem 0 .375rem; scroll-margin-top: 4.25rem; }
+  .lead { font-size: 1.0625rem; line-height: 1.65; color: var(--ink-2); max-width: 66ch; }
+  .lead strong { color: var(--ink); }
+  .note { font-size: 0.8125rem; color: var(--ink-3); }
+
+  /* 目录导航：长文档的寻路 */
+  .jump { display: flex; flex-wrap: wrap; gap: .375rem; margin: 0 0 1.625rem; }
+  .jump a {
+    font-size: 0.8125rem;
+    padding: .375rem .75rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--ink-2);
+    text-decoration: none;
+    transition: transform 120ms var(--ease-out), background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+  }
+  .jump a:hover { color: var(--brand); border-color: var(--brand-edge); background: var(--brand-weak); }
+  .jump a:active { transform: scale(.97); }
+
+  .callout { border-left: 3px solid var(--brand); background: var(--brand-weak); padding: .75rem 1rem; border-radius: 0 8px 8px 0; margin: .875rem 0; }
+  .callout.warn { border-left-color: #f59e0b; background: var(--amber-weak); }
+  .timers { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .75rem; margin: 1rem 0 .25rem; }
+  .timer { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: .875rem 1rem; }
+  .timer .t-int { display: block; font-size: 1.375rem; color: var(--brand); font-weight: 600; letter-spacing: -0.015em; line-height: 1.2; }
+  .timer b { font-weight: 500; }
+  .timer span { font-size: 0.875rem; color: var(--ink-2); }
+  .timer em { display: block; font-style: normal; font-size: 0.75rem; color: var(--ink-3); margin-top: .375rem; }
+  /* 画布 */
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.75rem; color: var(--ink-3); margin: 4px 0 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+  #pg-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: #fbfcfe; }
+  #pg-canvas { min-width: 800px; }
+  #pg-scroll:fullscreen, #pg-scroll:-webkit-full-screen { background: #fbfcfe; padding: 18px 22px; border: none; border-radius: 0; }
+  .pg-card { width: 100%; height: 100%; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 14px 10px 12px; display: flex; gap: 11px; box-shadow: 0 1px 2px rgba(15, 23, 42, .05); }
+  .pg-card.is-loop { border-style: dashed; border-color: #9db8f0; background: #f8fbff; }
+  .pg-card.by-cloud { border-left: 5px solid #2563eb; }
+  .pg-card.by-agent { border-left: 5px solid #16a34a; }
+  .pg-card.by-folder { border-left: 5px solid #d97706; }
+  .pg-card.by-sw { border-left: 5px solid #9333ea; }
+  .pg-num { flex: 0 0 26px; height: 26px; border-radius: 999px; background: var(--brand); color: #fff; font-size: 13px; font-weight: 500; display: flex; align-items: center; justify-content: center; margin-top: 2px; }
+  .pg-card.is-loop .pg-num { background: #64748b; }
+  .pg-main { min-width: 0; flex: 1; }
+  .pg-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .pg-title b { font-size: 15px; font-weight: 500; }
+  .pg-text { margin: 3px 0 0; font-size: 13px; line-height: 1.6; color: var(--ink-2); }
+  .pg-chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+  .chip-cloud { background: #e0edff; color: #1d4ed8; }
+  .chip-agent { background: #dcfce7; color: #15803d; }
+  .chip-folder { background: #fef3c7; color: #92400e; }
+  .chip-sw { background: #f3e8ff; color: #7e22ce; }
+
+  /* 画布工具条：半透明材质，内容从底下滚过去时仍能分清层次 */
+  .canvas-bar {
+    display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+    margin: .875rem 0 .5rem;
+    position: sticky; top: 0; z-index: 5;
+    padding: .625rem 0;
+    background: var(--bg-72);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  .canvas-bar button {
+    font: inherit; font-size: 0.8125rem; min-height: 32px; padding: .375rem .875rem;
+    border: 1px solid var(--line-2); background: var(--surface); border-radius: 8px;
+    cursor: pointer; color: var(--ink-2);
+    transition: transform 120ms var(--ease-out), background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+  }
+  .canvas-bar button:hover { background: #f1f5f9; color: var(--ink); }
+  .canvas-bar button:active { transform: scale(.97); }
+  .canvas-bar button:focus-visible, .jump a:focus-visible, .shot img:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  /* 左侧电梯导航：只在屏幕够宽、不会压到正文时出现 */
+  .rail { position: fixed; left: 1.5rem; top: 50%; transform: translateY(-50%); width: 172px; z-index: 4; display: none; }
+  .rail ol { list-style: none; margin: 0; padding: 0; position: relative; }
+  .rail .track { position: absolute; left: 3px; top: 8px; bottom: 8px; width: 2px; border-radius: 2px; background: var(--line); }
+  .rail .mark { position: absolute; left: 3px; top: 0; width: 2px; border-radius: 2px; background: var(--brand); transition: transform 320ms var(--ease-out), height 320ms var(--ease-out); }
+  .rail a {
+    display: flex; align-items: baseline; gap: .5rem;
+    padding: .4375rem .5rem .4375rem 1.125rem;
+    font-size: .8125rem; color: var(--ink-3); text-decoration: none; border-radius: 8px;
+    transition: color 140ms ease, background-color 140ms ease, transform 120ms var(--ease-out);
+  }
+  .rail a:hover { color: var(--ink); background: rgba(47, 111, 237, .07); }
+  .rail a:active { transform: scale(.98); }
+  .rail a[aria-current="true"] { color: var(--brand); font-weight: 500; }
+  .rail .n { font-size: .75rem; opacity: .75; font-variant-numeric: tabular-nums; }
+  @media (min-width: 1420px) {
+    .rail { display: block; }
+    .jump { display: none; }
+  }
+
+  /* 回到顶部：右下角悬浮圆钮，滚过一段距离才浮现 */
+  .totop {
+    /* 贴着正文右缘，不是钉在屏幕角落：以内容列（1080）的右边线为基准 */
+    position: fixed; left: 50%; margin-left: min(540px, calc(50% - 44px - 1.25rem)); bottom: 2rem; z-index: 6;
+    width: 44px; height: 44px; border-radius: 999px;
+    display: grid; place-items: center; cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, .55);
+    background: rgba(255, 255, 255, .72);
+    -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 0 6px 22px rgba(15, 23, 42, .16);
+    color: var(--ink-2); padding: 0;
+    opacity: 0; visibility: hidden; transform: translateY(10px) scale(.9);
+    transition: opacity 200ms ease, transform 280ms var(--ease-out), color 140ms ease, visibility 0s linear 200ms;
+  }
+  .totop.on {
+    opacity: 1; visibility: visible; transform: none;
+    transition: opacity 180ms ease, transform 320ms var(--ease-out), color 140ms ease;
+    animation: to-top-in 280ms var(--ease-out) backwards;
+  }
+  /* 出现时呼吸引导一次（两下，约 1.7 秒后停）——不做常驻循环，避免视线被反复拉走 */
+  .totop.on::after {
+    content: ''; position: absolute; inset: 0; border-radius: 999px; pointer-events: none;
+    animation: to-top-breath 820ms ease-out 240ms 2;
+  }
+  @keyframes to-top-in { from { opacity: 0; transform: translateY(10px) scale(.9) } to { opacity: 1; transform: none } }
+  @keyframes to-top-breath {
+    from { box-shadow: 0 0 0 0 rgba(47, 111, 237, .32) }
+    to { box-shadow: 0 0 0 16px rgba(47, 111, 237, 0) }
+  }
+  .totop:hover { color: var(--brand); }
+  .totop:active { transform: scale(.92); }
+  .totop:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+  .totop svg { width: 18px; height: 18px; }
+
+  /* 表格 */
+  table { border-collapse: collapse; width: 100%; margin: .75rem 0; background: var(--surface); font-size: 0.875rem; }
+  th, td { border: 1px solid var(--line); padding: .5625rem .75rem; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; font-weight: 500; }
+  td b { font-weight: 500; }
+  code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.8125rem; background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
+  /* 步骤 + 截图 */
+  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 1.25rem; margin: .875rem 0; }
+  .step > h3 { margin: 0 0 4px; }
+  .step > h3 .no { color: var(--brand); font-weight: 500; margin-right: 8px; }
+  .shot { margin: 12px 0 4px; }
+  .shot img { display: block; width: 100%; max-width: 900px; border: 1px solid var(--line-2); border-radius: 8px; cursor: zoom-in; background: #fff; transition: border-color 140ms ease, box-shadow 140ms ease; }
+  .shot img:hover { border-color: var(--brand-edge); box-shadow: 0 2px 10px rgba(15, 23, 42, .07); }
+  .shot figcaption { font-size: 0.75rem; color: var(--ink-3); margin-top: 6px; }
+  .ok-bad { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 10px; }
+  .ok, .bad { border-radius: 8px; padding: .625rem .875rem; font-size: 0.875rem; }
+  .ok { background: #f0fdf4; border: 1px solid #bbf7d0; }
+  .bad { background: #fff1f2; border: 1px solid #fecdd3; }
+  .ok b, .bad b { display: block; font-size: 0.8125rem; margin-bottom: .1875rem; letter-spacing: .01em; }
+  .ok b { color: #15803d; }
+  .bad b { color: var(--rose); }
+  ul.tight { margin: 8px 0; padding-left: 22px; }
+  ul.tight li { margin: 4px 0; }
+  #lightbox {
+    position: fixed; inset: 0; z-index: 99; padding: 1.5rem;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, .72);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    opacity: 0; visibility: hidden;
+    transition: opacity 180ms ease, visibility 0s linear 180ms;
+  }
+  #lightbox.on { opacity: 1; visibility: visible; transition: opacity 200ms ease; }
+  #lightbox img {
+    max-width: 100%; max-height: 100%; border-radius: 10px;
+    box-shadow: 0 24px 60px rgba(2, 6, 23, .45);
+    transform: scale(.94);
+    transition: transform 260ms var(--ease-out);
+  }
+  #lightbox.on img { transform: none; }
+  #lightbox.closing img { transform: scale(.94); transition: transform 160ms var(--ease-in); }
+  #lightbox .lb-hint { position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%); font-size: .75rem; color: rgba(255, 255, 255, .72); }
+  footer.ft { margin-top: 2.75rem; padding-top: 1.125rem; border-top: 1px solid var(--line); font-size: 0.75rem; color: var(--ink-3); }
+  footer.ft a { color: var(--brand); }
+  @media (max-width: 720px) {
+    .totop { bottom: 1.25rem; }
+    .wrap { padding: 1.25rem .75rem 2.5rem; }
+    .canvas-bar { position: static; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
+  /* 尊重系统三项辅助设置：减少动效 / 减少半透明 / 增加对比 */
+  @media (prefers-reduced-motion: reduce) {
+    .jump a, .canvas-bar button, .shot img { transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease; }
+    .jump a:active, .canvas-bar button:active { transform: none; }
+    #lightbox, #lightbox img, #lightbox.closing img { transition: opacity 140ms ease; transform: none !important; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rail .mark { transition: none; }
+    .totop, .totop.on { transform: none; transition: opacity 140ms ease, visibility 0s linear 140ms; animation: none; }
+    .totop.on::after { animation: none; box-shadow: none; }
+    .totop:active { transform: none; }
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .totop { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; border-color: var(--line-2); }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .canvas-bar { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    #lightbox { background: rgba(15, 23, 42, .95); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
+  @media print {
+    body { background: #fff; font-size: 12px; }
+    .canvas-bar, .legend, #lightbox, .jump, .rail, .totop, .no-print { display: none !important; }
+    #pg-scroll { overflow: visible; border: none; }
+    .step, .timer, table { break-inside: avoid; }
+    h2 { break-after: avoid; }
+    .shot img { max-height: 620px; width: auto; }
+    p, li { orphans: 2; widows: 2; }
+  }
+</style>
+</head>
+<body id="top">
+
+<nav class="rail no-print" aria-label="章节导航">
+  <ol id="rail-list">
+    <span class="track"></span><span class="mark" id="rail-mark"></span>
+    <li><a href="#sec-flow"><span class="n">一</span>报关单的完整旅程</a></li>
+    <li><a href="#sec-key"><span class="n">二</span>sk- 密钥从哪来</a></li>
+    <li><a href="#sec-setup"><span class="n">三</span>新装一台代理机</a></li>
+    <li><a href="#sec-fix"><span class="n">四</span>卡住了怎么办</a></li>
+    <li><a href="#sec-never"><span class="n">五</span>别在现场做三件事</a></li>
+  </ol>
+</nav>
+<div class="wrap">
+
+<header class="hd">
+  <h1>代理机是怎么干活的<small>通关宝前置机（代理机）工作机制 · 新机装机 · 现场排障</small></h1>
+  <p class="meta-line">适用版本 <b>v0.1.8</b> 及之后 · 整理日期 <b>2026-11-04</b> · 内容全部对照本仓库代码与《前置机对接接口文档 v1.4》核实 · 要打印或存 PDF 用浏览器自带的打印：Windows 按 <b>Ctrl+P</b>，Mac 按 <b>⌘P</b>，或直接在浏览器菜单里选「打印」</p>
+</header>
+
+<nav class="jump no-print" aria-label="本文目录">
+  <a href="#sec-flow">完整旅程</a>
+  <a href="#sec-key">密钥从哪来</a>
+  <a href="#sec-setup">新机装机 6 步</a>
+  <a href="#sec-fix">卡住了怎么办</a>
+  <a href="#sec-never">别做的三件事</a>
+</nav>
+
+<p class="lead">一句话先讲清楚：<strong>代理机不报关，它只搬文件。</strong>报关单从通关宝云平台下来，落到客户那台机器上「单一窗口导入客户端」的文件夹里；海关的回执从那个文件夹里回到通关宝。代理机就是两头之间那个不停跑腿的搬运工——它自己不申报，也不碰海关的网络。</p>
+
+<div class="callout">
+  <b>它一天到晚只靠三个定时器转着</b>
+  <div class="timers">
+    <div class="timer">
+      <b class="t-int">每 10 秒</b>
+      <span>调接口向服务端<b>尝试拉取报关单 XML 报文</b></span>
+      <em>可改：参数配置 → 拉取任务间隔（1～86400 秒）</em>
+    </div>
+    <div class="timer">
+      <b class="t-int">每 3 秒</b>
+      <span>扫描本机「回执」目录，有新回执就<b>调接口推送到服务端</b></span>
+      <em>可改：参数配置 → 回执扫描间隔（1～3600 秒）</em>
+    </div>
+    <div class="timer">
+      <b class="t-int">每 30 秒</b>
+      <span>调接口向服务端<b>报一次心跳</b>「我还活着」</span>
+      <em>可改：参数配置 → 心跳间隔（10～300 秒）；平台约 3 分钟收不到就告警</em>
+    </div>
+  </div>
+  <p class="note" style="margin-bottom:0">三个间隔都是界面里能改的参数，上面的秒数是出厂默认值。改动保存后立即生效，不用重启。</p>
+</div>
+
+<h2 id="sec-flow"><span class="no">一</span>报关单的完整旅程（画布图）</h2>
+<div class="callout warn">
+  <b>先说清范围：当前只有「货物申报 / 报关单暂存」（DECCUS001）这一条业务真的在跑</b>
+  <p style="margin:4px 0 0">下面这张图讲的就是它：软件按循环自动把服务端下发的 XML 文件<b>拉取下载过来 → 建立任务记录 → 推到「目录配置」里和单一窗口一致的那个目录 → 再回头拉取对应目录里的回执传回服务端</b>。其余 5 个业务类型<b>目前只是界面上的目录配置项，没有任何真实处理逻辑和接口接入</b>；这些业务的<b>需求、接口、软件自身的操作逻辑都还未确定</b>——不是配好目录就能跑，也没有可承诺的排期。要启用哪个，得先把需求定下来、再把接口定下来、再把软件逻辑做出来。</p>
+</div>
+<p class="note">按住 <b>Ctrl（或 ⌘）+ 滚轮</b> 缩放，鼠标拖动空白处平移，也可以用上面那排按钮；<b>回到 100%</b> 只把缩放拉回原比例，平移过的位置不变，按 <b>回到原点</b> 才会同时复位缩放、平移和滚动；点<b>全屏查看</b>能占满整块屏幕细看，按 <b>Esc</b> 退出。工具条在你往下滚看图时会一直吸在顶部。这张图是只读的：节点拖不动、文字改不了、连线不能重画。图里三个「每 N 秒」都是参数配置里的默认值，现场可以按需要改，改完立即生效不用重启。</p>
+
+<div class="legend">
+  <span><i class="chip-cloud" style="background:#2563eb"></i><b>通关宝服务端</b>（云平台后端）</span>
+  <span><i class="chip-agent" style="background:#16a34a"></i><b>前置代理机</b>（本软件，跑在现场机器上）</span>
+  <span><i class="chip-folder" style="background:#d97706"></i><b>本机文件夹</b>（代理机与单一窗口共用）</span>
+  <span><i class="chip-sw" style="background:#9333ea"></i><b>单一窗口客户端 / 海关</b>（电子口岸的官方工具）</span>
+  <span style="color:#2f6fed">— — 蓝虚线 = 全天循环 / 并行运行</span>
+</div>
+
+<div class="canvas-bar no-print">
+  <button type="button" id="pg-home">回到原点</button>
+  <button type="button" id="pg-zoom-out">缩小</button>
+  <button type="button" id="pg-zoom-reset">回到 100%</button>
+  <button type="button" id="pg-zoom-in">放大</button>
+  <button type="button" id="pg-full">全屏查看</button>
+  <span class="note" id="pg-zoom-tip" role="status" aria-live="polite"></span>
+</div>
+
+<div id="pg-scroll">
+  <div id="pg-canvas"></div>
+</div>
+
+<div class="callout">
+  <b>关键：只有「拉」，没有「推」</b>
+  <p style="margin:4px 0 0">代理机不监听、不接收任何通知——<b>它根本不知道服务端什么时候多了一张报关单</b>，只能按固定间隔<b>定时调接口，向服务端尝试拉取</b>报文（默认 10 秒，参数配置里可改）。所以新单最多等一个轮询周期才会被拉走，这是设计如此，不是卡住了。断网期间的单也不会丢：留在服务端，网络恢复后下一次轮询自动接着拉。回执那半边同理——代理机是定时去扫目录，不是单一窗口通知它有回执了。</p>
+</div>
+
+<h2 id="sec-key"><span class="no">二</span>sk- 密钥从哪来</h2>
+<p>权限配置里唯一要填的就是<b>企业鉴权密钥</b>（<code>sk-</code> 开头）。它是这台机器访问通关宝数据的唯一凭证，一把密钥对应一个企业的申报数据。</p>
+<table>
+  <thead>
+    <tr><th style="width:26%">用哪种密钥</th><th>从哪拿</th><th>能申报谁的数据</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>企业密钥</b>（常规）</td>
+      <td>找<b>商务或产品</b>要；他们从<b>通关宝后管 → 租户管理</b>里把这家企业的密钥复制出来给你。</td>
+      <td>只有这一家企业。换企业就得换密钥。</td>
+    </tr>
+    <tr>
+      <td><b>平台跨租户密钥</b>（特殊）</td>
+      <td>同样是找商务/产品开通，属于平台级凭证，不默认发放。</td>
+      <td>一把密钥可以处理<b>所有有效业务租户</b>的报关单——四个接口协议不变，代理机自动识别。</td>
+    </tr>
+  </tbody>
+</table>
+<div class="callout warn">
+  <b>用平台跨租户密钥要知道的事</b>
+  <ul class="tight" style="margin-bottom:0">
+    <li>回执上传时必须带上通关宝的任务号，而任务号要靠<b>本机账本反查</b>：先从回执文件名里挑出可能是自己投递过的，再从回执内容里取流水号（ClientSeqNo）去账本里对，<b>恰好命中一条</b>才算关联成功。</li>
+    <li>所以对不上的回执不会上传，会停在目录里并记一条「回执未匹配」等人工核查——这不是坏了，是不敢乱传别家的回执。</li>
+    <li>一把钥匙开所有门，<b>保管责任更大</b>：不要发到群里、不要写进任何文档、不要转给第三方。</li>
+  </ul>
+</div>
+
+<h2 id="sec-setup"><span class="no">三</span>新装一台代理机：按顺序做 6 件事</h2>
+
+<div class="callout warn">
+  <b>动手之前先凑齐这 4 样，缺一样就别开始</b>
+  <ul class="tight" style="margin-bottom:0">
+    <li><b>生产环境请部署在 Windows Server 服务器上</b>：能装 exe 软件、常年开机、不会被人随手带走，也不会因为谁合个盖子就断网。普通 Windows 电脑／笔记本只建议<b>临时测试</b>用，且必须先把电源设置配成永不睡眠、永不休眠（见第三节第 4 步）。</li>
+    <li>一串 <code>sk-</code> 开头的企业鉴权密钥（找商务或产品要，见上一节）。生产环境的服务器地址已经做在软件里，不用填。</li>
+    <li>单一窗口导入客户端<b>已经装好，并且里面的目录已经配好、任务能正常跑</b>——代理机要跟它对齐。</li>
+    <li>这台机器的时间是准的（时间差太多会影响报关单的认领）。</li>
+  </ul>
+</div>
+
+<div class="step">
+  <h3><span class="no">1</span>装软件</h3>
+  <p>双击安装包（<b>通关宝 proxy Setup.exe</b>）一路下一步。装哪个盘都行；只装当前登录用户，<b>不需要管理员密码</b>。</p>
+  <div class="ok-bad">
+    <div class="ok"><b>做好了的样子</b>软件能打开，界面正常显示，不白屏。</div>
+    <div class="bad"><b>没做好</b>被安全软件拦：把本软件加入白名单后重装。</div>
+  </div>
+</div>
+
+<div class="step">
+  <h3><span class="no">2</span>填密钥（左侧「权限配置」）</h3>
+  <p>把 <code>sk-</code> 密钥粘进<b>企业鉴权密钥</b>，点<b>保存</b>，再点<b>测试访问</b>。下面那个「实例名」是软件自己生成的，代表这台机器在通关宝里的身份，灰的点不动，也别改。</p>
+  <figure class="shot">
+    <img src="assets/access.png" alt="权限配置界面：企业鉴权密钥、实例名、保存与测试访问按钮">
+    <figcaption>权限配置（生产包界面）：只有密钥一项要填；实例名只读。</figcaption>
+  </figure>
+  <div class="ok-bad">
+    <div class="ok"><b>做好了的样子</b>显示「访问正常」并给出响应耗时（毫秒）。</div>
+    <div class="bad"><b>这步没过就别往下做</b>「访问失败」多半是：密钥不对 / 这台机上不了网 / 被防火墙或安全软件拦。</div>
+  </div>
+</div>
+
+<div class="step">
+  <h3><span class="no">3</span>配目录（最关键、最容易出错的一步）</h3>
+  <p>先去把<b>单一窗口导入客户端启动起来</b>，然后在「目录配置」页顶部填上它的安装文件夹，点<b>一键导入</b>——软件会照着对方已经配好的目录自动填进来。导入后仍然要<b>逐个核对</b>，两边必须一模一样。</p>
+  <figure class="shot">
+    <img src="assets/dir.png" alt="目录配置界面顶部的从单一窗口导入区块">
+    <figcaption>「从单一窗口导入」：填对方安装文件夹 → 一键导入。它不保证 100% 成功，导完必须双边核对。</figcaption>
+  </figure>
+  <p>每个业务类型都有 4 个目录，各自的角色：</p>
+  <table>
+    <thead><tr><th style="width:30%">目录</th><th>谁往里放</th><th>谁从里取</th></tr></thead>
+    <tbody>
+      <tr><td><b>待发送文件目录</b>（OutBox）</td><td>代理机放报关单</td><td>单一窗口取走发海关</td></tr>
+      <tr><td><b>发送完毕的文件</b>（SentBox）</td><td>单一窗口放已发送的</td><td>留底，两边都不用管</td></tr>
+      <tr><td><b>回执 / 异常情况说明文件</b>（InBox）</td><td>单一窗口放海关回执</td><td>代理机取走传回通关宝</td></tr>
+      <tr><td><b>服务器端校验失败文件</b>（FailBox）</td><td>单一窗口放没过校验的</td><td>出问题时人工看</td></tr>
+    </tbody>
+  </table>
+  <figure class="shot">
+    <img src="assets/dir-goods.png" alt="货物申报业务的四个目录都已填好，显示目录 4/4">
+    <figcaption>配齐了的样子：右上角「目录 4/4」，输入框下面干干净净没有红字。</figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="assets/dir-missing.png" alt="目录校验失败时输入框下方出现的红字提示">
+    <figcaption>没配好的样子：路径填了但文件夹不存在，每个输入框下面直接出红字「不存在，请先建好该文件夹」。<b>说明</b>：本图取自 mac 开发机，红字是因为 mac 上没有对应文件夹；上一张的 <code>D:\</code> 路径是按现场 Windows 写法填的示例。</figcaption>
+  </figure>
+  <div class="ok-bad">
+    <div class="ok"><b>硬性要求</b>路径必须是这台机器上<b>真实存在的文件夹</b>且能读能写；和单一窗口里配的<b>一模一样</b>（差一个字母就白跑）。</div>
+    <div class="bad"><b>常见坑</b>文件夹还没建就填了路径 · 写成别人的共享盘 · 待发送和回执填反了 · 装在 <code>C:\Program Files</code> 这类不允许写的目录里。</div>
+  </div>
+  <p class="note">货物申报这一组至少要配齐「待发送」和「回执」；缺目录时点启动会被软件直接拦住，不会静默失败。</p>
+</div>
+
+<div class="step" id="step-power">
+  <h3><span class="no">4</span>参数配置（默认值就能用，只看两件事）</h3>
+  <p><b>开机自动启动</b>和<b>保持本机唤醒</b>默认都开着，<b>别关</b>。屏幕常亮不用开（纯展示用，费电）。三个轮询间隔用默认即可。要注意「保持本机唤醒」只拦得住<b>系统自动</b>睡眠，手动睡眠、按电源键、合笔记本盖子都拦不住，所以电源计划必须在系统层面另配一次——见下面这块。</p>
+  <figure class="shot">
+    <img src="assets/param.png" alt="参数配置界面：启动与常驻、代理轮询的三个间隔、日志与调试">
+    <figcaption>参数配置：上面两个开关是必查项，中间三个间隔就是第一节说的「每 10 / 3 / 30 秒」。</figcaption>
+  </figure>
+  <div class="callout warn">
+    <b>部署在哪台机器上：生产用 Windows Server，个人电脑只做临时测试</b>
+    <p style="margin:4px 0 0">Windows 一旦进入睡眠或休眠，<b>整个用户态会被冻结、网卡同时断电</b>——代理机的拉取、回执扫描、心跳、日志上传会全部停摆，报关单留在云端积压，直到机器醒过来才恢复。软件里的「保持本机唤醒」只能阻止<b>系统自动</b>睡眠（底层是 Windows 的 SetThreadExecutionState），<b>拦不住</b>有人手动点睡眠、按电源键、合笔记本盖子。</p>
+    <p style="margin:8px 0 2px">所以电源计划要在系统层面一次配好（用管理员身份打开 PowerShell，各执行一次，重启后依然有效）：</p>
+    <ul class="tight">
+      <li><code>powercfg /change standby-timeout-ac 0</code> —— 接交流电源时永不睡眠</li>
+      <li><code>powercfg /change hibernate-timeout-ac 0</code> —— 接交流电源时永不休眠</li>
+      <li>笔记本临时测试用：另把「合盖动作」设为<b>不采取任何操作</b></li>
+      <li>Windows Server：系统本身很少自己睡，但要确认<b>没有组策略或计划任务定时重启</b>，也别把补丁自动重启排在无人值守的时段</li>
+    </ul>
+    <p class="note" style="margin-bottom:0">万一真睡了会丢单吗？不会。睡眠期间任务留在云端，机器醒来后代理机立刻自己补跑一轮业务和日志上传，不用人工干预；日志里也会留下「系统进入睡眠/休眠」和「已从睡眠/休眠中恢复」两条记录，回头查那段时间为什么没动静一目了然。</p>
+  </div>
+</div>
+
+<div class="step">
+  <h3><span class="no">5</span>启动业务</h3>
+  <p>先确认单一窗口里<b>对应业务和「接收回执」两个任务都已经在跑</b>（首页有黄条提醒）。再回本软件首页，找到<b>货物申报（报关单暂存）</b>那张卡，点右边<b>启动</b>；卡片变蓝并持续呼吸光就是跑起来了。</p>
+  <figure class="shot">
+    <img src="assets/home.png" alt="首页：顶部提示、四个状态格、业务启动卡片列表">
+    <figcaption>首页：顶部两条黄条是必看的现场约束；中间四个格子是判断「有没有在干活」的地方。（黄条里说的「电脑／笔记本」是软件内的通用提醒；按本文口径，生产应部署在 Windows Server 上，只有临时测试才用个人电脑，那时才需要额外管合盖这件事。）</figcaption>
+  </figure>
+  <div class="callout warn" style="margin-bottom:0">
+    目前<b>只有「货物申报 / 报关单暂存」（DECCUS001）有真实的接口接入和运行逻辑</b>。其余 5 张卡<b>只有界面上的目录配置项，没有任何真实处理逻辑</b>，点了会提示不支持——这不是故障。这些业务的<b>需求、接口和软件自身的操作逻辑都还未确定</b>，别按「配好目录就该能跑」来理解，也别向客户承诺上线时间。
+  </div>
+</div>
+
+<div class="step">
+  <h3><span class="no">6</span>验收，然后就可以不管它了</h3>
+  <p>走一票真实报关单，看首页四个格子：<b>运行中业务 1 / 6</b>、<b>与服务器连接状态 已连通</b>、<b>已投递 / 已归档回执</b>两个数字会往上跳。对得上就算交付完成。</p>
+  <figure class="shot">
+    <img src="assets/home-guide.png" alt="首页底部的操作指引四步">
+    <figcaption>首页底部就是这四步操作指引，忘了顺序时回来看一眼。</figcaption>
+  </figure>
+  <div class="ok-bad">
+    <div class="ok"><b>关窗口 ≠ 退出</b>右上角关掉后程序还在后台跑轮询和日志上传；真要退出，在任务栏小图标上右键选「退出」。</div>
+    <div class="bad"><b>升级之后要做的一件事</b>在线升级会重启程序，而代理默认不自启——升级后第一次打开会问「要不要把升级前开着的业务重新开启」，点<b>是</b>即可；当时没点，下次打开还会再问。</div>
+  </div>
+  <p class="note">版本和更新在左侧「关于」页：检查更新 → 下载更新 → 重启并安装。安装会自动退出、完成后自动打开，本机配置和日志都保留。</p>
+</div>
+
+<h2 id="sec-fix"><span class="no">四</span>卡住了怎么办：按看到的提示查</h2>
+<table>
+  <thead><tr><th style="width:30%">看到什么</th><th style="width:30%">多半是怎么回事</th><th>怎么办</th></tr></thead>
+  <tbody>
+    <tr><td>「无法启动：该业务还有 X 个目录未配置」</td><td>目录没填齐</td><td>去「目录配置」补齐这一组 4 个目录，再点启动</td></tr>
+    <tr><td>「请先配置货物申报的 OutBox / InBox 目录」</td><td>「待发送」或「回执」目录是空的</td><td>补齐这两个目录就能启动</td></tr>
+    <tr><td>「XX不存在，请先建好该文件夹」</td><td>填的路径在这台电脑上没有</td><td>先在盘上把文件夹建出来，或用旁边「选择…」挑现成的</td></tr>
+    <tr><td>「必须是绝对路径」</td><td>写成了相对路径 / 少了盘符</td><td>写成 <code>D:\Deccus001\OutBox</code> 这种带盘符的完整路径</td></tr>
+    <tr><td>「XX不可读写」</td><td>文件夹只读、被占用，或放在不允许写的系统目录</td><td>换到 D 盘一类的普通目录，并确认这台机登录的账号能写</td></tr>
+    <tr><td>「测试访问」= 访问失败</td><td>密钥不对 · 本机没外网 · 被防火墙或安全软件拦</td><td>先确认这台机能打开网页；再找商务/产品核对密钥；还不行把本软件加进安全软件白名单</td></tr>
+    <tr><td>首页「与服务器连接状态 = 未连通」</td><td>断网或服务器不通</td><td>报关单不会丢，网通了自动接着搬；长时间不恢复再查网络</td></tr>
+    <tr><td>目录都对了，但「待发送」里没文件</td><td>业务其实没启动，或通关宝那边根本没派单</td><td>看首页卡片是不是蓝色在呼吸；再看通关宝上这张单是否已进入待发状态</td></tr>
+    <tr><td>「待发送」里有文件，通关宝一直没更新</td><td>单一窗口自己的任务没跑 /「接收回执」没开 / 两边目录不一致</td><td>去单一窗口确认导入任务和接收回执都在运行，并和「目录配置」逐条比对路径</td></tr>
+    <tr><td>回执在「回执」目录里躺着没被传</td><td>该回执对不上代理机放出去的文件（别人的文件或历史遗留）</td><td>属正常，代理机只处理自己放出去过的；怀疑漏了就把当天日志传给通关宝查</td></tr>
+    <tr><td>回执上传失败，反复重试</td><td>网络抖动，或后端暂时不可用</td><td>不用管，进重试队列自动接着传；长期不恢复再查网络和后端</td></tr>
+    <tr><td>某段时间完全没干活，日志里出现「系统进入睡眠/休眠」</td><td>主机睡眠或休眠：用户态冻结 + 网卡断电，轮询与上传一起停</td><td>「参数配置」里<b>保持本机唤醒</b>打开，并按第 4 步用 powercfg 把系统设成永不睡眠、永不休眠；服务器还要检查有没有定时重启</td></tr>
+    <tr><td>首页顶部出现新版本横幅</td><td>在线升级提醒</td><td>点「前往更新」去「关于」页操作；升级前会记下正在跑的业务，装完问你是否恢复</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sec-never"><span class="no">五</span>别在现场做这三件事</h2>
+<ul class="tight">
+  <li>不要移动、改名、删除<b>「回执」目录</b>里的文件——代理机只读不搬，历史文件由现场自己清理。</li>
+  <li>不要把<b>企业鉴权密钥</b>发到群里、写进文档、转给第三方；它就是这台机器访问通关宝数据的唯一凭证。</li>
+  <li>不要让这台机器<b>睡眠、休眠、关机或拔网线</b>，也不要把生产环境长期跑在个人电脑或笔记本上——用 Windows Server，并按第 4 步把电源计划一次配死。</li>
+</ul>
+
+<footer class="ft">
+  <p><b>本图依据</b>：机制与提示文案取自本仓库 <code>src/main/agent.js</code>（拉取/投递/回执/心跳）、<code>src/main/ledger.js</code>（SQLite 账本字段与状态）、<code>src/main/config.js</code>（默认值、取值范围、目录校验文案）、<code>src/main/sw-import.js</code>（单一窗口目录导入）、<code>src/renderer/views/*</code>（各界面）；接口口径取自 <code>docs/前置机对接接口文档.md</code> v1.4 与 <code>docs/平台前置机跨租户对接文档.md</code>。</p>
+  <p><b>截图说明</b>：软件只出 Windows 包，本组截图在 mac 开发机上用同一套界面拍摄，左侧版本号后的「· dev」表示非安装包形态，界面布局与生产一致。</p>
+</footer>
+
+</div>
+
+<button type="button" class="totop" id="to-top" aria-label="回到顶部" title="回到顶部">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M12 19V5M5 12l7-7 7 7" />
+  </svg>
+</button>
+
+<div id="lightbox" role="dialog" aria-label="截图放大" tabindex="-1"><img alt=""><span class="lb-hint">点任意处或按 Esc 关闭</span></div>
+
+<script src="vendor/x6.min.js"></script>
+<script>
+(function () {
+  var STEPS = [
+    {
+      actor: 'cloud',
+      title: '通关宝上有一张报关单等着发',
+      sub: '报关员做完制单、审核，报关单（一个 XML）就进了服务端的待发送队列。服务端不会通知代理机，代理机也不知道什么时候多了一张单。',
+      edge: '前置代理机每 10 秒轮询\n调接口向服务端尝试拉取 XML 报文'
+    },
+    {
+      actor: 'agent',
+      title: '轮询问到了：先验货，再落到本机',
+      sub: '核对文件指纹和认领凭证（租约）都有效才收下，下载到本机临时文件，并向本机数据库（SQLite 投递账本，下文简称「账本」）新增一条任务记录——只记任务号、文件名、状态，不存报关单内容。',
+      edge: '前置代理机把文件\n原子改名放进目录'
+    },
+    {
+      actor: 'folder',
+      title: '「待发送」目录里出现了文件',
+      sub: '单一窗口客户端从这个目录取件。取走即算投递完成，前置代理机调接口回报服务端「已投递」，云端转为等待回执。',
+      edge: '单一窗口客户端\n自己来取件，代理机不催'
+    },
+    {
+      actor: 'sw',
+      title: '单一窗口发给海关 → 回执再回来',
+      sub: '发完的文件挪进「已发送」；海关处理后，回执由单一窗口写进「回执」目录（没过校验的另放「校验失败」目录）。',
+      edge: '前置代理机每 3 秒\n扫一次回执目录'
+    },
+    {
+      actor: 'agent',
+      title: '认领回执，传回通关宝',
+      sub: '只认自己放出去过的文件：拿回执文件名主干去本机数据库的投递记录里比对；平台跨租户密钥还要再取流水号 ClientSeqNo 反查任务号，恰好命中一条才算对上。对不上的不读、不传、不移动。',
+      edge: '前置代理机调接口\n把回执原文推送到服务端'
+    },
+    {
+      actor: 'cloud',
+      title: '通关宝显示「暂存成功」',
+      sub: '通关宝服务端解析回执。只代表单一窗口收下了，不等于申报、审结或放行成功。上传失败自动重试；回执对不上则停传并告警，等人工核查。',
+      edge: ''
+    },
+    {
+      actor: 'agent',
+      loop: true,
+      title: '并行：每 30 秒报一次心跳',
+      sub: '前置代理机调接口告诉服务端：我还活着、版本、本机 IP、两个目录能不能访问、还有几票没处理。平台约 3 分钟收不到就告警。'
+    }
+  ]
+
+  var ACTORS = {
+    cloud: { label: '通关宝服务端', cls: 'chip-cloud' },
+    agent: { label: '前置代理机（本软件）', cls: 'chip-agent' },
+    folder: { label: '本机文件夹（两边共用）', cls: 'chip-folder' },
+    sw: { label: '单一窗口客户端 / 海关', cls: 'chip-sw' }
+  }
+
+  var CARD_W = 580
+  var CARD_X = 150
+  var TOP = 20
+  var GAP = 78
+
+  function cardHeight(s) {
+    var lines = Math.max(1, Math.ceil(s.sub.length / 38))
+    return 52 + lines * 21
+  }
+
+  function makeCard(cell) {
+    var d = cell.getData()
+    var a = ACTORS[d.actor]
+    var box = document.createElement('div')
+    box.className = 'pg-card by-' + d.actor + (d.loop ? ' is-loop' : '')
+    var num = document.createElement('span')
+    num.className = 'pg-num'
+    num.textContent = d.loop ? '∥' : String(d.index)
+    var main = document.createElement('div')
+    main.className = 'pg-main'
+    var t = document.createElement('div')
+    t.className = 'pg-title'
+    var b = document.createElement('b')
+    b.textContent = d.title
+    var chip = document.createElement('span')
+    chip.className = 'pg-chip ' + a.cls
+    chip.textContent = a.label
+    t.appendChild(b)
+    t.appendChild(chip)
+    var p = document.createElement('p')
+    p.className = 'pg-text'
+    p.textContent = d.sub
+    main.appendChild(t)
+    main.appendChild(p)
+    box.appendChild(num)
+    box.appendChild(main)
+    return box
+  }
+
+  X6.Shape.HTML.register({
+    shape: 'pg-card',
+    width: CARD_W,
+    height: 96,
+    html: makeCard
+  })
+
+  var canvas = document.getElementById('pg-canvas')
+  var scroller = document.getElementById('pg-scroll')
+  var GRAPH_MIN_W = 880
+  var totalH = TOP
+  STEPS.forEach(function (s, i) {
+    s.h = cardHeight(s)
+    s.y = totalH
+    s.i = i
+    totalH += s.h + (i === STEPS.length - 1 ? 0 : GAP)
+  })
+  totalH += 36
+
+  canvas.style.height = totalH + 'px'
+  var initW = Math.max(GRAPH_MIN_W, scroller.clientWidth)
+  canvas.style.width = initW + 'px'
+
+  var graph = new X6.Graph({
+    container: canvas,
+    width: initW,
+    height: totalH,
+    background: { color: 'transparent' },
+    grid: {
+      visible: true,
+      type: 'doubleMesh',
+      args: [
+        { color: '#e6ebf2', thickness: 1 },
+        { color: '#d3dce8', thickness: 1, factor: 4 }
+      ]
+    },
+    // 只读 = 不许拖动/改尺寸/连线/改文字；平移和缩放照常可用
+    panning: { enabled: true },
+    mousewheel: {
+      enabled: true,
+      modifiers: ['ctrl', 'meta'],
+      minScale: 0.5,
+      maxScale: 2,
+      zoomAtMousePosition: true
+    },
+    interacting: {
+      nodeMovable: false,
+      edgeMovable: false,
+      edgeLabelMovable: false,
+      arrowheadMovable: false,
+      vertexMovable: false,
+      vertexAddable: false,
+      vertexDeletable: false,
+      magnetConnectable: false,
+      cellMovable: false,
+      cellUnresizable: true,
+      labelMovable: false,
+      editable: false
+    }
+  })
+
+  var LINE = { stroke: '#94a3b8', strokeWidth: 1.6, targetMarker: { name: 'block', width: 9, height: 7 } }
+
+  function label(text, color) {
+    return [{
+      position: { distance: 0.5 },
+      attrs: {
+        text: { text: text, fontSize: 12.5, fill: color || '#334155' },
+        labelBackground: {
+          fill: '#ffffff', stroke: color ? '#c7dbff' : '#dbe3ee', strokeWidth: 1, rx: 5,
+          refWidth: '114%', refHeight: text.indexOf('\n') >= 0 ? '126%' : '170%',
+          x: '-57%', y: text.indexOf('\n') >= 0 ? '-13%' : '-36%'
+        }
+      }
+    }]
+  }
+
+  var cards = STEPS.map(function (s) {
+    return graph.addNode({
+      shape: 'pg-card',
+      x: CARD_X,
+      y: s.y,
+      width: CARD_W,
+      height: s.h,
+      zIndex: 2,
+      data: { index: s.i + 1, actor: s.actor, title: s.title, sub: s.sub, loop: !!s.loop }
+    })
+  })
+
+  for (var i = 0; i < cards.length - 2; i++) {
+    var e = STEPS[i].edge
+    graph.addEdge({
+      source: { cell: cards[i].id, anchor: 'bottom' },
+      target: { cell: cards[i + 1].id, anchor: 'top' },
+      connector: { name: 'rounded', args: { radius: 6 } },
+      attrs: { line: LINE },
+      labels: e ? label(e) : []
+    })
+  }
+
+  // 全天循环：第 6 步回到第 1 步
+  var loopX = CARD_X + CARD_W + 60
+  graph.addEdge({
+    source: { x: CARD_X + CARD_W, y: STEPS[5].y + STEPS[5].h / 2 },
+    target: { x: CARD_X + CARD_W, y: STEPS[0].y + STEPS[0].h / 2 },
+    vertices: [{ x: loopX, y: STEPS[5].y + STEPS[5].h / 2 }, { x: loopX, y: STEPS[0].y + STEPS[0].h / 2 }],
+    connector: { name: 'rounded', args: { radius: 6 } },
+    attrs: {
+      line: { stroke: '#2f6fed', strokeWidth: 1.5, strokeDasharray: '6 4', targetMarker: { name: 'block', width: 9, height: 7 } }
+    },
+    labels: label('前置代理机\n全天循环', '#2f6fed')
+  })
+
+  // 心跳：虚线挂到主链左侧，表示并行
+  var backX = CARD_X - 60
+  graph.addEdge({
+    source: { x: CARD_X, y: STEPS[6].y + STEPS[6].h / 2 },
+    target: { x: CARD_X, y: STEPS[0].y + STEPS[0].h / 2 },
+    vertices: [{ x: backX, y: STEPS[6].y + STEPS[6].h / 2 }, { x: backX, y: STEPS[0].y + STEPS[0].h / 2 }],
+    connector: { name: 'rounded', args: { radius: 6 } },
+    attrs: {
+      line: { stroke: '#94a3b8', strokeWidth: 1.3, strokeDasharray: '4 4', targetMarker: { name: 'block', width: 8, height: 6 } }
+    },
+    labels: label('每 30 秒调接口\n报心跳', '#64748b')
+  })
+
+  // 缩放控制
+  var tip = document.getElementById('pg-zoom-tip')
+  function showZoom() {
+    tip.textContent = '当前 ' + Math.round(graph.zoom() * 100) + '%'
+  }
+
+  // 画布宽度铺满外层容器，内容整体居中，右侧不再留白
+  function fitCanvas(zoomFit) {
+    var w = Math.max(GRAPH_MIN_W, scroller.clientWidth)
+    canvas.style.width = w + 'px'
+    graph.resize(w, totalH)
+    graph.translate((w - GRAPH_MIN_W) / 2, graph.translate().ty)
+    if (zoomFit) graph.zoomToFit({ padding: 26, maxScale: 1 })
+    else graph.zoomTo(1)
+    showZoom()
+  }
+
+  var fsBtn = document.getElementById('pg-full')
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null }
+  function enterFs() {
+    var req = scroller.requestFullscreen || scroller.webkitRequestFullscreen
+    if (req) req.call(scroller)
+  }
+  function exitFs() {
+    var ex = document.exitFullscreen || document.webkitExitFullscreen
+    if (fsElement() && ex) ex.call(document)
+  }
+  fsBtn.addEventListener('click', function () { if (fsElement()) exitFs(); else enterFs() })
+  function onFsChange() {
+    var on = !!fsElement()
+    fsBtn.textContent = on ? '退出全屏' : '全屏查看'
+    // 等全屏布局落定再量宽度
+    setTimeout(function () { fitCanvas(on) }, 60)
+  }
+  document.addEventListener('fullscreenchange', onFsChange)
+  document.addEventListener('webkitfullscreenchange', onFsChange)
+  window.addEventListener('resize', function () { fitCanvas(false) })
+  fitCanvas(false)
+  // 回到原点：平移和缩放一起复位，并把页面滚回画布顶部
+  function resetView() {
+    var w = Math.max(GRAPH_MIN_W, scroller.clientWidth)
+    canvas.style.width = w + 'px'
+    graph.resize(w, totalH)
+    graph.translate((w - GRAPH_MIN_W) / 2, 0)
+    graph.zoomTo(1)
+    scroller.scrollTop = 0
+    scroller.scrollLeft = 0
+    showZoom()
+  }
+  document.getElementById('pg-home').addEventListener('click', resetView)
+  document.getElementById('pg-zoom-in').addEventListener('click', function () { graph.zoom(0.1); showZoom() })
+  document.getElementById('pg-zoom-out').addEventListener('click', function () { graph.zoom(-0.1); showZoom() })
+  document.getElementById('pg-zoom-reset').addEventListener('click', function () { graph.zoomTo(1); showZoom() })
+  showZoom()
+
+  // 打印/存 PDF 时把画布缩到一页宽，打完恢复
+  window.addEventListener('beforeprint', function () {
+    exitFs()
+    canvas.style.width = GRAPH_MIN_W + 'px'
+    graph.resize(GRAPH_MIN_W, totalH)
+    graph.translate(0, 0)
+    graph.zoomTo(0.62)
+  })
+  window.addEventListener('afterprint', function () { fitCanvas(false) })
+
+  // ---- 电梯导航 + 回到顶部 ----
+  var railLinks = Array.prototype.slice.call(document.querySelectorAll('#rail-list a'))
+  var mark = document.getElementById('rail-mark')
+  var fab = document.getElementById('to-top')
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+
+  function scrollToEl(el, offset) {
+    var top = el.getBoundingClientRect().top + (window.scrollY || document.documentElement.scrollTop) - offset
+    window.scrollTo({ top: top > 0 ? top : 0, behavior: reduceMotion.matches ? 'auto' : 'smooth' })
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.rail a, .jump a'), function (a) {
+    a.addEventListener('click', function (e) {
+      var target = document.getElementById(a.getAttribute('href').slice(1))
+      if (!target) return
+      e.preventDefault()
+      scrollToEl(target, 72)
+    })
+  })
+
+  fab.addEventListener('click', function () {
+    window.scrollTo({ top: 0, behavior: reduceMotion.matches ? 'auto' : 'smooth' })
+  })
+
+  var ticking = false
+  function updateNav() {
+    ticking = false
+    var y = window.scrollY || document.documentElement.scrollTop
+    fab.classList.toggle('on', y > 560)
+    if (!railLinks.length) return
+    // 判定线取视口上方约 1/3：高亮反映"我正在看哪一节"，而不是"标题顶到屏幕边"
+    var line = Math.round(window.innerHeight * 0.34)
+    var current = null
+    railLinks.forEach(function (a) {
+      var el = document.getElementById(a.getAttribute('href').slice(1))
+      if (el && el.getBoundingClientRect().top <= line) current = a
+    })
+    // 最后几节内容短，滚到底也抬不到判定线上方 —— 到底就直接锁定最后一节
+    var doc = document.documentElement
+    if (y + window.innerHeight >= doc.scrollHeight - 4) current = railLinks[railLinks.length - 1]
+    if (!current) current = railLinks[0]
+    railLinks.forEach(function (a) { a.setAttribute('aria-current', a === current ? 'true' : 'false') })
+    mark.style.height = current.offsetHeight + 'px'
+    mark.style.transform = 'translateY(' + current.offsetTop + 'px)'
+  }
+  function onScroll() {
+    if (ticking) return
+    ticking = true
+    requestAnimationFrame(updateNav)
+  }
+  window.addEventListener('scroll', onScroll, { passive: true })
+  window.addEventListener('resize', onScroll)
+  updateNav()
+
+  // 截图点击放大
+  var lb = document.getElementById('lightbox')
+  var lbImg = lb.querySelector('img')
+  var lastFocus = null
+  var closeTimer = null
+
+  function closeLb() {
+    if (!lb.classList.contains('on')) return
+    lb.classList.remove('on')
+    lb.classList.add('closing')
+    clearTimeout(closeLb._t)
+    closeLb._t = setTimeout(function () {
+      lb.classList.remove('closing')
+      lbImg.removeAttribute('src')
+    }, 200)
+    if (lastFocus) lastFocus.focus()
+  }
+
+  function openLb(img) {
+    lastFocus = img
+    clearTimeout(closeLb._t)
+    lb.classList.remove('closing')
+    lbImg.src = img.src
+    lb.classList.add('on')
+    lb.focus({ preventScroll: true })
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.shot img'), function (img, i) {
+    img.tabIndex = 0
+    img.setAttribute('role', 'button')
+    img.setAttribute('aria-label', '放大查看：' + (img.alt || '界面截图' + (i + 1)))
+    img.addEventListener('click', function () { openLb(img) })
+    img.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLb(img) }
+    })
+  })
+  lb.addEventListener('click', closeLb)
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeLb()
+  })
+})()
+</script>
+</body>
+</html>

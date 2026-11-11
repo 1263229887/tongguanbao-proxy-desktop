@@ -10,6 +10,9 @@ import { debug, warn } from './logger.js'
 // - receipts 以 xmlSha256 唯一，只记录本代理自己投递任务所产生回执的处理状态
 //   （ACKED_MATCHED / ACKED_UNMATCHED / RETRY_PENDING / PERMANENT_REJECTED / LOCAL_UNMATCHED）
 // - log_uploads 以日志文件名唯一，记录本地日志上传平台的结果与重试进度（见 log-upload.js）
+// - ceb_tasks / ceb_receipts 跨境电商接口族独立账本（CB-AGENT-01）：
+//   任务键 route + taskId + messageGuid + xmlSha256（CEB 无 clientSeqNo，轮次标识是 messageGuid），
+//   回执键 route + xmlSha256；与 DEC 的 tasks/receipts 互不混用（两族 taskId 各自编号，可能重号）
 // 库中数据全部来自本代理运行时的实际处理，不导入任何历史文件；进程重启后从库恢复。
 
 let db = null
@@ -118,6 +121,51 @@ export async function initLedger() {
       message TEXT,
       firstSeenAt INTEGER,
       updatedAt INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ceb_tasks (
+      route TEXT NOT NULL,
+      taskId INTEGER NOT NULL,
+      messageGuid TEXT NOT NULL,
+      xmlSha256 TEXT NOT NULL,
+      tenantId INTEGER,
+      orderId INTEGER,
+      tradeMode TEXT,
+      messageType TEXT,
+      operation TEXT,
+      channelId TEXT,
+      dxpId TEXT,
+      fileName TEXT,
+      tempName TEXT,
+      sendDir TEXT,
+      status TEXT NOT NULL,
+      dispatchToken TEXT,
+      leaseExpireAt INTEGER,
+      reportOk INTEGER NOT NULL DEFAULT 0,
+      reportConflictCode INTEGER,
+      firstAt INTEGER,
+      updatedAt INTEGER NOT NULL,
+      PRIMARY KEY (route, taskId, messageGuid, xmlSha256)
+    );
+    CREATE TABLE IF NOT EXISTS ceb_receipts (
+      route TEXT NOT NULL,
+      xmlSha256 TEXT NOT NULL,
+      fullPath TEXT,
+      fileName TEXT,
+      size INTEGER,
+      mtime INTEGER,
+      state TEXT NOT NULL,
+      channelId TEXT,
+      taskId INTEGER,
+      tenantId INTEGER,
+      returnStatus TEXT,
+      receiptId INTEGER,
+      retryCount INTEGER NOT NULL DEFAULT 0,
+      nextRetryAt INTEGER,
+      lastAttemptAt INTEGER,
+      message TEXT,
+      firstSeenAt INTEGER,
+      updatedAt INTEGER NOT NULL,
+      PRIMARY KEY (route, xmlSha256)
     );
   `)
   migrateTasksPk()
@@ -347,6 +395,148 @@ export function upsertLogUpload(record) {
 export function resetTerminalLogUploads() {
   return db.prepare("UPDATE log_uploads SET state = 'PENDING', retryCount = 0, nextRetryAt = NULL, updatedAt = ? WHERE state = 'BLOCKED'").run(Date.now())
     .changes
+}
+
+// ---------- CEB（跨境电商）账本：接口族独立，键为 route + taskId + messageGuid + xmlSha256（CB-AGENT-01） ----------
+// CEB 的 clientSeqNo 恒为空，投递轮次标识是 messageGuid；leaseExpireAt 是毫秒时间戳（DEC 是日期字符串）。
+
+const CEB_TASK_COLS = [
+  'tenantId',
+  'orderId',
+  'tradeMode',
+  'messageType',
+  'operation',
+  'channelId',
+  'dxpId',
+  'fileName',
+  'tempName',
+  'sendDir',
+  'status',
+  'dispatchToken',
+  'leaseExpireAt',
+  'reportOk',
+  'reportConflictCode',
+  'firstAt'
+]
+
+const CEB_RECEIPT_COLS = [
+  'fullPath',
+  'fileName',
+  'size',
+  'mtime',
+  'state',
+  'channelId',
+  'taskId',
+  'tenantId',
+  'returnStatus',
+  'receiptId',
+  'retryCount',
+  'nextRetryAt',
+  'lastAttemptAt',
+  'message',
+  'firstSeenAt'
+]
+
+export function getCebTaskRecord(route, taskId, messageGuid, xmlSha256) {
+  return (
+    db
+      .prepare('SELECT * FROM ceb_tasks WHERE route = ? AND taskId = ? AND messageGuid = ? AND xmlSha256 = ?')
+      .get(route, taskId, messageGuid, xmlSha256) || null
+  )
+}
+
+/** 同一 route + taskId + messageGuid 的既有轮次（协议异常判定：同轮次内容不应变化） */
+export function getCebRoundRecord(route, taskId, messageGuid) {
+  return db.prepare('SELECT * FROM ceb_tasks WHERE route = ? AND taskId = ? AND messageGuid = ? LIMIT 1').get(route, taskId, messageGuid) || null
+}
+
+export async function upsertCebTask(record) {
+  const cols = []
+  const vals = []
+  for (const c of CEB_TASK_COLS) {
+    if (record[c] === undefined) continue
+    cols.push(c)
+    vals.push(c === 'reportOk' ? (record[c] ? 1 : 0) : record[c])
+  }
+  // 部分更新（回报确认/冲突冻结，不带 status）走 UPDATE：INSERT..ON CONFLICT 会对未携带的 NOT NULL 列抛错
+  if (record.status === undefined) {
+    const setSql = cols.map((c) => `${c} = ?`).join(', ')
+    const res = db
+      .prepare(`UPDATE ceb_tasks SET ${setSql}, updatedAt = ? WHERE route = ? AND taskId = ? AND messageGuid = ? AND xmlSha256 = ?`)
+      .run(...vals, Date.now(), record.route, record.taskId, record.messageGuid, record.xmlSha256)
+    if (res.changes === 0) warn(`CEB 账本部分更新未命中行 taskId=${record.taskId}（记录不存在，忽略）`, 'ledger')
+    return getCebTaskRecord(record.route, record.taskId, record.messageGuid, record.xmlSha256)
+  }
+  const placeholders = cols.map(() => '?').join(', ')
+  const updates = cols.map((c) => `${c} = excluded.${c}`).join(', ')
+  db.prepare(
+    `INSERT INTO ceb_tasks (route, taskId, messageGuid, xmlSha256, ${cols.join(', ')}, updatedAt)
+     VALUES (?, ?, ?, ?, ${placeholders}, ?)
+     ON CONFLICT(route, taskId, messageGuid, xmlSha256) DO UPDATE SET ${updates}, updatedAt = excluded.updatedAt`
+  ).run(record.route, record.taskId, record.messageGuid, record.xmlSha256, ...vals, Date.now())
+  return getCebTaskRecord(record.route, record.taskId, record.messageGuid, record.xmlSha256)
+}
+
+export function cebPendingTaskCount() {
+  return db
+    .prepare("SELECT COUNT(*) c FROM ceb_tasks WHERE status = 'PREPARED' OR (status = 'DELIVERED' AND reportOk = 0)")
+    .get().c
+}
+
+/** DELIVERED 但 OUTBOX_DROPPED 回报未确认的 CEB 任务（补报只重试同一个请求，不改报 FAILED、不重写文件） */
+export function unreportedCebTasks() {
+  return db
+    .prepare("SELECT * FROM ceb_tasks WHERE status = 'DELIVERED' AND reportOk = 0 AND dispatchToken IS NOT NULL")
+    .all()
+}
+
+/**
+ * 某路由下已投递超过 olderThanMs、且自该任务投递后整条路由再没来过任何回执的任务（回执缺失粗检）。
+ * 深圳公服回执文件名与原报文的对应关系现场未确认，无法按文件名主干精确归属，
+ * 这里只报「整条路由静默」的疑似信号（客户端没跑/接收目录配错），不做单任务级断言。
+ */
+export function cebDeliveredWithoutReceipt(route, olderThanMs) {
+  return db
+    .prepare(
+      `SELECT t.taskId, t.fileName, t.firstAt FROM ceb_tasks t
+       WHERE t.route = ? AND t.status = 'DELIVERED' AND t.fileName IS NOT NULL
+         AND COALESCE(t.firstAt, 0) <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM ceb_receipts r WHERE r.route = t.route AND r.firstSeenAt >= t.firstAt
+         )`
+    )
+    .all(route, Date.now() - olderThanMs)
+}
+
+/** CEB 回执处理账本：route + 原始字节 SHA-256 唯一（与后端「租户+路由+字节哈希」幂等口径对齐） */
+export function getCebReceiptRecord(route, xmlSha256) {
+  return db.prepare('SELECT * FROM ceb_receipts WHERE route = ? AND xmlSha256 = ?').get(route, xmlSha256) || null
+}
+
+export async function upsertCebReceipt(record) {
+  const cols = []
+  const vals = []
+  for (const c of CEB_RECEIPT_COLS) {
+    if (record[c] === undefined) continue
+    cols.push(c)
+    vals.push(record[c])
+  }
+  if (record.state === undefined) {
+    const setSql = cols.map((c) => `${c} = ?`).join(', ')
+    const res = db
+      .prepare(`UPDATE ceb_receipts SET ${setSql}, updatedAt = ? WHERE route = ? AND xmlSha256 = ?`)
+      .run(...vals, Date.now(), record.route, record.xmlSha256)
+    if (res.changes === 0) warn(`CEB 回执账本部分更新未命中行 sha=${String(record.xmlSha256).slice(0, 12)}（记录不存在，忽略）`, 'ledger')
+    return getCebReceiptRecord(record.route, record.xmlSha256)
+  }
+  const placeholders = cols.map(() => '?').join(', ')
+  const updates = cols.map((c) => `${c} = excluded.${c}`).join(', ')
+  db.prepare(
+    `INSERT INTO ceb_receipts (route, xmlSha256, ${cols.join(', ')}, updatedAt)
+     VALUES (?, ?, ${placeholders}, ?)
+     ON CONFLICT(route, xmlSha256) DO UPDATE SET ${updates}, updatedAt = excluded.updatedAt`
+  ).run(record.route, record.xmlSha256, ...vals, Date.now())
+  return getCebReceiptRecord(record.route, record.xmlSha256)
 }
 
 export function getLedgerPath() {

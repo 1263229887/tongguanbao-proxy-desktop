@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('intake', {
   getPollState: () => invoke('poll:state'),
   startAgent: () => invoke('agent:start'),
   stopAgent: () => invoke('agent:stop'),
+  startCeb: () => invoke('ceb:start'),
+  stopCeb: () => invoke('ceb:stop'),
+  getCebState: () => invoke('ceb:state'),
 
   getLogs: () => invoke('logs:get'),
   clearLogs: () => invoke('logs:clear'),
@@ -50,5 +53,6 @@ contextBridge.exposeInMainWorld('intake', {
 
   onLogEntry: listen('log:entry'),
   onPollState: listen('poll:state'),
+  onCebState: listen('ceb:state'),
   onUpdateState: listen('update:state')
 })

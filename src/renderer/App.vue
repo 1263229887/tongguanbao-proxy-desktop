@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import logo from './assets/logo.png'
 import HomeView from './views/HomeView.vue'
 import AccessView from './views/AccessView.vue'
@@ -7,7 +7,7 @@ import DirView from './views/DirView.vue'
 import ParamView from './views/ParamView.vue'
 import AboutView from './views/AboutView.vue'
 import { isRunning, startBiz } from './biz-run.js'
-import { initStore, meta, pollState, updateState, view, go } from './store.js'
+import { initStore, meta, pollState, cebState, updateState, view, go } from './store.js'
 
 const VIEWS = { home: HomeView, access: AccessView, dir: DirView, param: ParamView, about: AboutView }
 const NAV = [
@@ -24,6 +24,17 @@ const statusTone = {
   bad: 'bg-rose-500',
   idle: 'bg-slate-300'
 }
+
+// 顶栏状态汇总两套引擎：任一运行即「轮询执行中」，错误取先出现的一条
+const headerStatus = computed(() => {
+  const a = pollState.value
+  const b = cebState.value
+  if (a.running || b.running) return { tone: 'warn', text: '轮询执行中' }
+  const err = a.lastError || b.lastError
+  if (err) return { tone: 'bad', text: err }
+  if (a.polling || b.polling) return { tone: 'ok', text: '轮询中' }
+  return { tone: 'idle', text: '按业务启动' }
+})
 
 // 发现新版本 / 下载完成时主动弹提醒（右上角，点击直达关于页）。
 // 只是提示：不自动下载、不自动安装，是否更新完全由用户在关于页决定。
@@ -145,11 +156,8 @@ async function offerBizRestoreAfterUpgrade() {
       <header class="h-14 shrink-0 flex items-center gap-2 px-5 border-b border-slate-200 bg-white">
         <h1 class="text-sm font-semibold">{{ NAV.find((n) => n.key === view)?.label }}</h1>
         <div class="ml-auto flex items-center gap-2 text-xs text-slate-500">
-          <span
-            class="w-2 h-2 rounded-full"
-            :class="pollState.running ? statusTone.warn : pollState.lastError ? statusTone.bad : pollState.polling ? statusTone.ok : statusTone.idle"
-          />
-          <span>{{ pollState.running ? '轮询执行中' : pollState.lastError || (pollState.polling ? '轮询中' : '按业务启动') }}</span>
+          <span class="w-2 h-2 rounded-full" :class="statusTone[headerStatus.tone]" />
+          <span>{{ headerStatus.text }}</span>
         </div>
       </header>
 
