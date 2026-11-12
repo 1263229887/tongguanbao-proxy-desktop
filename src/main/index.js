@@ -153,6 +153,8 @@ async function loadRenderer() {
     loadFailCount = 0
     win.show()
     if (wasFallback) info('渲染页面已恢复加载', 'app')
+    // 开发/测试包默认打开调试台，方便直接看 Network；生产包不自动打开
+    if (!app.isPackaged || APP_ENV !== 'prod') win.webContents.openDevTools({ mode: 'detach' })
   } catch (e) {
     if (settled) return
     settled = true

@@ -34,9 +34,14 @@ import { CEB_ROUTES, CEB_TRADE_MODES, cebChannelDeliverable } from '../shared/bi
 // 心跳由 DEC 侧统一持有（本引擎经注入的 hooks 启停），两族任一运行即保持心跳。
 //
 // 渠道：现场每个渠道一个独立传输客户端（深圳公服只是其中之一），各有自己的收发目录。
-// 任务归属按报文 BaseTransfer.dxpId 匹配本地渠道配置；dxpId 留空的渠道作为该路由兜底目录。
+// 任务归属按报文 BaseTransfer.dxpId 匹配本地渠道配置；dxpId 留空的渠道作为兜底目录。
+// 9610 三单、9610 清单（暂存/直报）、9710·9810 订单统一走 SZ_PUBLIC_DIRECT（深圳公服）。
+// SW_INVENTORY_TEMP 仅用于旧批次及其回执追溯，不再领取新任务。
 // 回执只读不移动；CEB 回执文件名与原报文的对应关系现场未确认，不做本地 taskId 关联，
 // 统一带 route 上传原始字节，由后端按回执 XML 内容匹配（CEB304/506/604 各有匹配键）。
+
+const DIRECT_ROUTE = 'SZ_PUBLIC_DIRECT'
+const TEMP_SAVE_ROUTE = 'SW_INVENTORY_TEMP'
 
 const state = {
   running: false,
@@ -64,9 +69,50 @@ export function setCebHeartbeatHooks(hooks) {
   heartbeatHooks = { ...heartbeatHooks, ...hooks }
 }
 
-// 路由被后端拒绝（未开通/实例不在名单，1050004000）时的低频重试冷却，避免每 10s 刷屏
+// 路由业务校验被后端拒绝（1050004000：实例/令牌/状态冲突）时的低频重试冷却，避免每 10s 刷屏
 const ROUTE_COOLDOWN_MS = 5 * 60_000
 const routeCooldownUntil = new Map()
+
+// CEB 接口无操作权限（密钥无 CEB 授权/路由配置异常）时，前 10 次照常请求便于联调观察，
+// 超过后再按接口族暂停 1 分钟；任一次成功即清零重新计数
+const PERMISSION_RETRY_LIMIT = 10
+const PERMISSION_COOLDOWN_MS = 60_000
+const permissionFailures = { pull: 0, receipt: 0 }
+const permissionBlockedUntil = { pull: 0, receipt: 0 }
+const permissionWarned = { pull: false, receipt: false }
+
+function isPermissionDenied(res) {
+  const msg = String(res?.msg || '')
+  return res?.httpStatus === 403 || /没有.*权限|无权限|权限不足/.test(msg)
+}
+
+/** 记录一次无权限响应；超过阈值时暂停该接口族并返回 true */
+function notePermissionDenied(res, family) {
+  const count = ++permissionFailures[family]
+  warn(`CEB 接口无操作权限（${count}/${PERMISSION_RETRY_LIMIT}）：${res.msg}`, family === 'receipt' ? 'receipt' : 'pull')
+  const blocked = count > PERMISSION_RETRY_LIMIT
+  if (blocked) {
+    permissionBlockedUntil[family] = Date.now() + PERMISSION_COOLDOWN_MS
+    if (!permissionWarned[family]) {
+      permissionWarned[family] = true
+      warn(
+        `CEB ${family === 'receipt' ? '回执上传' : '任务拉取'}连续 ${PERMISSION_RETRY_LIMIT} 次无操作权限，暂停 ${PERMISSION_COOLDOWN_MS / 60_000} 分钟再试`,
+        family === 'receipt' ? 'receipt' : 'pull'
+      )
+    }
+  }
+  patch({
+    connected: false,
+    lastError: `CEB 接口无操作权限：${res.msg}（${count}/${PERMISSION_RETRY_LIMIT}${blocked ? '，已暂停重试' : ''}）`
+  })
+  return blocked
+}
+
+function resetPermissionFailures(family) {
+  permissionFailures[family] = 0
+  permissionBlockedUntil[family] = 0
+  permissionWarned[family] = false
+}
 
 function patch(values) {
   Object.assign(state, values)
@@ -90,18 +136,19 @@ function activeChannels(cfg) {
   return (cfg.cebChannels || []).filter((c) => c && c.enabled !== false)
 }
 
-/** 有可投递渠道（启用且配了发送目录）的路由集合——只领这些路由的任务，领了无法投递的任务只会空耗租约 */
-function deliverableRoutes(cfg) {
-  const routes = new Set()
-  for (const ch of activeChannels(cfg)) {
-    if (cebChannelDeliverable(ch)) routes.add(ch.route)
-  }
-  return [...routes]
+/** 旧 SW_INVENTORY_TEMP 批次的回执目录：单一窗口货物申报 InBox（仅回执追溯，不再投递任务） */
+function legacySwReceiptDir(cfg) {
+  return String(cfg?.bizDirs?.goods?.inBox || '').trim()
 }
 
-/** 按报文 dxpId 匹配渠道：先精确匹配，再回落到该路由 dxpId 留空的兜底渠道 */
-function matchChannel(cfg, route, dxpId) {
-  const channels = activeChannels(cfg).filter((c) => c.route === route && cebChannelDeliverable(c))
+/** 可投递的路由：所有新任务都走深圳公服直报，渠道可用即可领取 */
+function deliverableRoutes(cfg) {
+  return activeChannels(cfg).some(cebChannelDeliverable) ? [DIRECT_ROUTE] : []
+}
+
+/** 直报路由按报文 dxpId 匹配渠道：先精确匹配，再回落到 dxpId 留空的兜底渠道 */
+function matchChannel(cfg, dxpId) {
+  const channels = activeChannels(cfg).filter(cebChannelDeliverable)
   if (dxpId) {
     const exact = channels.find((c) => String(c.dxpId || '').trim() === dxpId)
     if (exact) return exact
@@ -209,24 +256,24 @@ async function deliverCebTask(cfg, task, pulledRoute) {
     return fail('CEB XML 校验失败')
   }
 
-  // 渠道匹配：dxpId 精确 → 路由兜底；都没有则报 FAILED（前端可见原因，配好渠道后可重投）
+  // 所有 CEB 任务（含 9610 清单暂存）都按 dxpId 匹配深圳公服渠道目录
   const dxpId = extractDxpId(xml)
-  const channel = matchChannel(cfg, route, dxpId)
+  const channel = matchChannel(cfg, dxpId)
   if (!channel) {
-    return fail(`未配置渠道目录（dxpId=${dxpId || '报文未携带'}，路由 ${route}），请在「目录配置」添加对应渠道`, {
+    return fail(`未配置渠道目录（dxpId=${dxpId || '报文未携带'}），请在「目录配置 → 渠道入口」添加对应渠道`, {
       anomaly: {
         type: 'ceb-channel-unmatched',
-        detail: `跨境电商任务找不到对应渠道目录（dxpId=${dxpId || '报文未携带'}，路由 ${route}），已回报失败；请在「目录配置」添加该渠道并填写发送目录后，在平台页面重投`
+        detail: `跨境电商任务找不到对应渠道目录（dxpId=${dxpId || '报文未携带'}），已回报失败；请在「目录配置 → 渠道入口」添加该渠道并填写发送目录后，在平台页面重投`
       }
     })
   }
   const sendDir = String(channel.sendDir || '').trim()
-  const channelTag = `渠道=${channel.name || channel.id}${dxpId ? ` dxp=${dxpId}` : ''}`
+  const targetTag = `渠道=${channel.name || channel.id}${dxpId ? ` dxp=${dxpId}` : ''}`
 
   try {
     await ensureWritableDir(sendDir, '发送目录')
   } catch (e) {
-    warn(`发送目录不可写：${e.message}。${summary} ${channelTag}`, 'deliver')
+    warn(`发送目录不可写：${e.message}。${summary} ${targetTag}`, 'deliver')
     reportAnomaly('ceb-outbox-unwritable', `跨境电商渠道「${channel.name || channel.id}」发送目录不可写，任务无法投递：${e.message}，请检查目录配置与磁盘/权限`)
     await reportCebTaskStatus(cfg, taskId, { dispatchToken, status: 'FAILED', message: '渠道发送目录不可写' })
     return { ok: false, reason: e.message }
@@ -292,7 +339,7 @@ async function deliverCebTask(cfg, task, pulledRoute) {
     if (finalStat) {
       const finalSha = sha256Hex(await fs.readFile(finalPath))
       if (finalSha === xmlSha256) {
-        info(`正式文件已存在且哈希一致，补记 DELIVERED。${summary} ${channelTag}`, 'deliver')
+        info(`正式文件已存在且哈希一致，补记 DELIVERED。${summary} ${targetTag}`, 'deliver')
         await upsertCebTask({ ...ledgerBase, status: 'DELIVERED' })
         const rep = await reportCebTaskStatus(cfg, taskId, {
           dispatchToken,
@@ -329,7 +376,7 @@ async function deliverCebTask(cfg, task, pulledRoute) {
     await fs.rename(temp, finalPath)
     await upsertCebTask({ route, taskId, messageGuid, xmlSha256, status: 'DELIVERED', dispatchToken })
 
-    info(`已写入发送目录：${summary} ${channelTag}`, 'deliver')
+    info(`已写入发送目录：${summary} ${targetTag}`, 'deliver')
     const rep = await reportCebTaskStatus(cfg, taskId, {
       dispatchToken,
       status: 'OUTBOX_DROPPED',
@@ -377,6 +424,7 @@ async function reconcileCebReports(cfg) {
 
 async function tickCebTasks() {
   if (taskBusy || !state.enabled) return
+  if (Date.now() < permissionBlockedUntil.pull) return
   const cfg = await loadConfig()
   const miss = missingAccess(cfg)
   if (miss.length) return patch({ lastError: `缺少 ${miss.join('、')}`, connected: false })
@@ -398,6 +446,10 @@ async function tickCebTasks() {
 
       const res = await pullCebTasks(cfg, { route, tradeModes: CEB_TRADE_MODES, batchSize: cfg.batchSize })
       if (!res.ok) {
+        if (isPermissionDenied(res)) {
+          if (notePermissionDenied(res, 'pull')) return
+          continue
+        }
         if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {
           setLinkPatch({ authFailed: true })
           patch({ connected: false, lastError: res.msg })
@@ -413,7 +465,7 @@ async function tickCebTasks() {
           return
         }
         if (res.code === BIZ_CODE.CEB_BIZ_REJECTED) {
-          // 未开通路由/实例不在名单：低频重试，告警一次，不影响其他路由
+          // 路由业务校验失败：低频重试，告警一次，不影响其他路由
           routeCooldownUntil.set(route, Date.now() + ROUTE_COOLDOWN_MS)
           warn(`CEB 路由 ${route} 暂不可用（${res.msg}），${ROUTE_COOLDOWN_MS / 60_000} 分钟后重试`, 'pull')
           patch({ lastError: `路由 ${routeLabel(route)}：${res.msg}` })
@@ -424,6 +476,7 @@ async function tickCebTasks() {
       }
 
       anyOk = true
+      resetPermissionFailures('pull')
       setLinkPatch({ authFailed: false, channelClosed: false })
       patch({ connected: true, lastError: null, tickCount: state.tickCount + 1 })
 
@@ -497,9 +550,9 @@ function isCebMessage(buf) {
  * 不做本地 taskId 关联（CEB 回执文件名对应关系现场未确认），由后端按 XML 内容匹配；
  * matched=false 留档告警，非法/超大永久拒绝，网络/临时错误指数退避，文件始终留在接收目录。
  */
-async function processCebReceipt(cfg, channel, file) {
+async function processCebReceipt(cfg, target, file) {
   const sha = await fileSha(file)
-  const rec = getCebReceiptRecord(channel.route, sha)
+  const rec = getCebReceiptRecord(target.route, sha)
   if (rec) {
     if (rec.state !== 'RETRY_PENDING') {
       settled.set(file.full, { size: file.size, mtime: file.mtime })
@@ -517,13 +570,13 @@ async function processCebReceipt(cfg, channel, file) {
   }
 
   const common = {
-    route: channel.route,
+    route: target.route,
     xmlSha256: sha,
     fullPath: file.full,
     fileName: file.name,
     size: file.size,
     mtime: file.mtime,
-    channelId: channel.id,
+    channelId: target.channelId ?? null,
     lastAttemptAt: Date.now(),
     firstSeenAt: rec?.firstSeenAt ?? Date.now(),
     retryCount: rec?.retryCount ?? 0
@@ -539,10 +592,21 @@ async function processCebReceipt(cfg, channel, file) {
   }
 
   const receivedAt = formatDateTime(new Date(file.mtime))
-  debug(`上传 CEB 回执 ${file.name} size=${buf.length} route=${channel.route} retry=${common.retryCount}`, 'receipt')
-  const res = await uploadCebReceipt(cfg, { route: channel.route, fileName: file.name, receivedAt, receiptXmlBase64: b64 })
+  debug(`上传 CEB 回执 ${file.name} size=${buf.length} route=${target.route} retry=${common.retryCount}`, 'receipt')
+  const res = await uploadCebReceipt(cfg, { route: target.route, fileName: file.name, receivedAt, receiptXmlBase64: b64 })
 
   if (!res.ok) {
+    if (isPermissionDenied(res)) {
+      const blocked = notePermissionDenied(res, 'receipt')
+      await upsertCebReceipt({
+        ...common,
+        retryCount: common.retryCount + 1,
+        state: 'RETRY_PENDING',
+        message: res.msg,
+        nextRetryAt: blocked ? permissionBlockedUntil.receipt : Date.now() + 2000
+      })
+      return
+    }
     if (res.code === BIZ_CODE.RECEIPT_INVALID || res.code === BIZ_CODE.RECEIPT_TOO_LARGE || res.code === BIZ_CODE.CEB_BIZ_REJECTED) {
       warn(`CEB 回执被后端拒绝（code=${res.code}），记为永久拒绝，文件保留：${file.name} ${res.msg}`, 'receipt')
       await upsertCebReceipt({ ...common, state: 'PERMANENT_REJECTED', message: res.msg })
@@ -564,6 +628,7 @@ async function processCebReceipt(cfg, channel, file) {
     return
   }
 
+  resetPermissionFailures('receipt')
   const data = res.data || {}
   if (data.matched) {
     await upsertCebReceipt({
@@ -587,13 +652,33 @@ async function processCebReceipt(cfg, channel, file) {
   patch({ lastError: `回执未匹配：${file.name}` })
 }
 
+/** 回执目录：深圳公服渠道接收目录 + 旧 SW 批次使用的单一窗口货物申报 InBox（仅追溯） */
+function receiptTargets(cfg) {
+  const targets = []
+  const seen = new Set()
+  const push = (target) => {
+    const key = target.receiveDir.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    targets.push(target)
+  }
+  for (const ch of activeChannels(cfg)) {
+    const receiveDir = String(ch.receiveDir || '').trim()
+    if (receiveDir) push({ route: DIRECT_ROUTE, channelId: ch.id, receiveDir })
+  }
+  const legacyDir = legacySwReceiptDir(cfg)
+  if (legacyDir) push({ route: TEMP_SAVE_ROUTE, channelId: null, receiveDir: legacyDir })
+  return targets
+}
+
 async function tickCebInbox() {
   if (inboxBusy || !state.enabled) return
+  if (Date.now() < permissionBlockedUntil.receipt) return
   const link = getLink()
   if (link.authFailed || link.channelClosed) return
   const cfg = await loadConfig()
-  const channels = activeChannels(cfg).filter((c) => String(c.receiveDir || '').trim())
-  if (!channels.length) return
+  const targets = receiptTargets(cfg)
+  if (!targets.length) return
 
   inboxBusy = true
   try {
@@ -601,15 +686,15 @@ async function tickCebInbox() {
     const now = Date.now()
     const ready = []
     const live = new Set()
-    for (const channel of channels) {
-      const files = await scanInboxOnce(String(channel.receiveDir).trim())
+    for (const target of targets) {
+      const files = await scanInboxOnce(target.receiveDir)
       for (const f of files) {
         live.add(f.full)
         const done = settled.get(f.full)
         if (done && done.size === f.size && done.mtime === f.mtime) continue
         const prev = inboxStable.get(f.full)
         if (prev && prev.size === f.size && prev.mtime === f.mtime && now - prev.seenAt >= 1500) {
-          ready.push({ channel, file: f })
+          ready.push({ target, file: f })
         } else {
           inboxStable.set(f.full, { size: f.size, mtime: f.mtime, seenAt: now })
         }
@@ -619,10 +704,11 @@ async function tickCebInbox() {
     for (const k of shaCache.keys()) if (!live.has(k)) shaCache.delete(k)
     for (const k of settled.keys()) if (!live.has(k)) settled.delete(k)
 
-    for (const { channel, file } of ready) {
+    for (const { target, file } of ready) {
       if (!state.enabled) break
+      if (Date.now() < permissionBlockedUntil.receipt) break
       try {
-        await processCebReceipt(cfg, channel, file)
+        await processCebReceipt(cfg, target, file)
       } catch (e) {
         error(`处理 CEB 回执异常 ${file.name}：${e.message}`, 'receipt')
       }
@@ -645,47 +731,42 @@ function checkCebReceiptsMissing() {
       const stuck = cebDeliveredWithoutReceipt(route, RECEIPT_GRACE_MS)
       if (!stuck.length) continue
       const oldestMin = Math.round((Date.now() - Math.min(...stuck.map((r) => r.firstAt || Date.now()))) / 60_000)
+      const clientHint = route === TEMP_SAVE_ROUTE ? '旧清单暂存通道对应的单一窗口客户端' : '对应传输客户端（如深圳公服客户端）'
       reportAnomaly(
         'ceb-receipt-missing',
-        `${routeLabel(route)}回执疑似异常：${stuck.length} 个任务已投递超过 ${Math.round(RECEIPT_GRACE_MS / 60_000)} 分钟，整条路由未再收到任何回执（最早 ${oldestMin} 分钟前投递）。请检查对应传输客户端（如深圳公服客户端）是否运行、接收目录配置是否与对方一致`,
+        `${routeLabel(route)}回执疑似异常：${stuck.length} 个任务已投递超过 ${Math.round(RECEIPT_GRACE_MS / 60_000)} 分钟，整条路由未再收到任何回执（最早 ${oldestMin} 分钟前投递）。请检查${clientHint}是否运行、接收目录配置是否与对方一致`,
         { minIntervalMs: 30 * 60_000 }
       )
-      patch({ lastError: '已投递任务长时间未收到回执，请检查对应传输客户端' })
+      patch({ lastError: '已投递任务长时间未收到回执，请检查对应客户端' })
     }
   } catch (e) {
     debug(`CEB 回执缺失检测异常：${e.message}`, 'receipt')
   }
 }
 
-/** 心跳用：各路由渠道目录健康（tradeMode 字段仅展示，填路由标识） */
+async function dirAccessible(dir) {
+  try {
+    await fs.access(dir)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 心跳用：深圳公服渠道目录健康（tradeMode 字段仅展示，填路由标识） */
 export async function getCebDirHealth() {
   const cfg = await loadConfig()
   const channels = activeChannels(cfg)
-  const out = []
-  for (const route of CEB_ROUTES.map((r) => r.id)) {
-    const chs = channels.filter((c) => c.route === route)
-    if (!chs.length) continue
-    let outboxOk = true
-    let inboxOk = true
-    for (const c of chs) {
-      if (c.sendDir) {
-        try {
-          await fs.access(c.sendDir)
-        } catch {
-          outboxOk = false
-        }
-      } else outboxOk = false
-      if (c.receiveDir) {
-        try {
-          await fs.access(c.receiveDir)
-        } catch {
-          inboxOk = false
-        }
-      } else inboxOk = false
-    }
-    out.push({ tradeMode: route, outboxOk, inboxOk })
+  if (!channels.length) return []
+  let outboxOk = true
+  let inboxOk = true
+  for (const c of channels) {
+    if (c.sendDir) outboxOk = outboxOk && (await dirAccessible(c.sendDir))
+    else outboxOk = false
+    if (c.receiveDir) inboxOk = inboxOk && (await dirAccessible(c.receiveDir))
+    else inboxOk = false
   }
-  return out
+  return [{ tradeMode: DIRECT_ROUTE, outboxOk, inboxOk }]
 }
 
 export { cebPendingTaskCount }
@@ -700,11 +781,17 @@ export async function startCebAgent() {
   const miss = missingAccess(cfg)
   if (miss.length) return patch({ enabled: false, running: false, lastError: `缺少 ${miss.join('、')}` })
   if (!deliverableRoutes(cfg).length) {
-    return patch({ enabled: false, running: false, lastError: '请先在「目录配置」添加跨境电商渠道并填写发送目录' })
+    return patch({
+      enabled: false,
+      running: false,
+      lastError: '请先在「目录配置 → 渠道入口」添加渠道并填写发送目录'
+    })
   }
 
   await initLedger()
   clearTimers()
+  resetPermissionFailures('pull')
+  resetPermissionFailures('receipt')
   state.enabled = true
   patch({ instanceName: cfg.instanceName, running: true, polling: true, lastError: null })
 

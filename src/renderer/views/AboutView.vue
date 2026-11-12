@@ -17,6 +17,16 @@ const checking = ref(false)
 const downloading = ref(false)
 const installing = ref(false)
 const installHint = ref('')
+const openingDevTools = ref(false)
+
+async function openDevTools() {
+  openingDevTools.value = true
+  try {
+    await window.intake.openDevTools()
+  } finally {
+    openingDevTools.value = false
+  }
+}
 
 const statusLine = computed(() => {
   const s = updateState.value
@@ -120,6 +130,18 @@ async function install() {
           开发模式不走在线更新。如需投放新包，运行「更新包上传工具.bat」一键打包并上传投放；客户端会按更新通道自动检查并提示。
         </p>
       </template>
+    </div>
+
+    <div class="panel p-5 max-w-[620px] mt-3">
+      <div class="text-sm font-semibold mb-2">调试与诊断</div>
+      <p class="text-xs text-slate-500 leading-relaxed">
+        开发 / 测试包启动时会自动打开调试控制台；生产环境也可用 Ctrl+Shift+I，或点下方按钮手动打开。Network 可查看全部请求的入参与返回。
+      </p>
+      <div class="mt-3">
+        <button class="btn-ghost" :disabled="openingDevTools" @click="openDevTools">
+          {{ openingDevTools ? '正在打开…' : '打开调试控制台' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>

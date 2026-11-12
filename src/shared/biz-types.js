@@ -14,7 +14,7 @@ export const BUSINESS_TYPES = [
 export const CEB_BIZ = {
   id: 'ceb',
   title: '跨境电商申报',
-  subtitle: '9610 清单 / 9710·9810 前置申报',
+  subtitle: '9610 订单 / 运单 / 清单 · 9710·9810 前置申报',
   channelBased: true
 }
 
@@ -52,11 +52,9 @@ export function countFilledDirs(entry) {
 // 每个渠道对应现场一个独立的传输客户端（如深圳公服客户端），各有自己的收发目录。
 // 任务归属渠道按报文 BaseTransfer.dxpId 匹配；dxpId 留空的渠道作为该路由的兜底目录。
 export const CEB_ROUTES = [
-  { id: 'SZ_PUBLIC_DIRECT', label: '直报（公服客户端）', messageTypes: ['CEB303', 'CEB505', 'CEB603'] },
-  { id: 'SW_INVENTORY_TEMP', label: '清单暂存单一（单一窗口清单模块）', messageTypes: ['CEB603'] }
+  { id: 'SZ_PUBLIC_DIRECT', label: '直报（深圳公服客户端）', messageTypes: ['CEB303', 'CEB505', 'CEB603'] },
+  { id: 'SW_INVENTORY_TEMP', label: '旧清单暂存通道（仅回执追溯）', messageTypes: ['CEB603'] }
 ]
-
-export const CEB_ROUTE_IDS = CEB_ROUTES.map((r) => r.id)
 
 export const CEB_TRADE_MODES = ['9610', '9710', '9810']
 
@@ -69,7 +67,7 @@ export const CEB_DIR_FIELDS = [
 ]
 
 export function emptyCebChannel() {
-  return { id: '', name: '', route: 'SZ_PUBLIC_DIRECT', dxpId: '', sendDir: '', receiveDir: '', bakDir: '', errDir: '', enabled: true }
+  return { id: '', name: '', dxpId: '', sendDir: '', receiveDir: '', bakDir: '', errDir: '', enabled: true }
 }
 
 /** 渠道是否可投递：启用且发送目录已配（接收目录只影响回执上传，不阻塞投递） */

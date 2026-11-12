@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from '../vendor/gsap.min.js'
 import StatusTile from '../components/StatusTile.vue'
 import SegTabs from '../components/SegTabs.vue'
-import { config, go, goTab, meta, pollState, cebState, updateState, uiTabs } from '../store.js'
+import { MODULE_TABS } from '../module-tabs.js'
+import { config, go, goTab, meta, pollState, cebState, updateState, uiFocus, uiTabs } from '../store.js'
 import { ALL_BIZ_TYPES, DIR_FIELDS, countFilledDirs, cebChannelReady } from '../../shared/biz-types.js'
 import { bizRun, isRunning, missingDirs, startBiz, stopBiz } from '../biz-run.js'
 
@@ -33,8 +34,8 @@ watch(
 
 const GUIDE = [
   { view: 'access', label: '权限配置', desc: '填写企业鉴权密钥（sk-…），可点眼睛图标显示/隐藏。开发/测试包可维护多组服务器地址 + 密钥并互切；生产包地址已内置，只需配密钥。保存后可点「测试访问」确认能否连通。' },
-  { view: 'dir', label: '目录配置', desc: '「单一窗口」页签配置各业务 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入；「渠道入口」页签按渠道配置跨境电商进口 / 出口的发送 / 接收目录。目录必须与对方完全一致。' },
-  { view: 'param', label: '参数配置', desc: '轮询间隔、回执/心跳间隔、开机自动启动、日志保留。本地开发可打开调试控制台查看 Network。' },
+  { view: 'dir', label: '目录配置', desc: '「单一窗口」页签配置各业务 OutBox / InBox / 归档 / 失败目录，可从单一窗口一键导入，9710·9810 报关单使用这里的货物申报目录；「渠道入口」页签按渠道配置跨境电商 CEB 报文的发送 / 接收目录。目录必须与对方完全一致。' },
+  { view: 'param', label: '参数配置', desc: '轮询间隔、回执/心跳间隔、开机自动启动、日志保留。调试控制台入口已移到「关于」页。' },
   { view: 'about', label: '关于与后台运行', desc: '在「关于」可查看版本信息。关闭主窗口后程序仍在后台；彻底退出请在托盘图标上右键。生产环境可用 Ctrl+Shift+I 打开调试台。' }
 ]
 
@@ -44,6 +45,10 @@ onMounted(() => {
   clock = setInterval(() => (now.value = Date.now()), 1000)
   // 已处于运行中的业务立刻挂上循环动效
   syncRunAnims()
+  if (uiFocus.value === 'biz') {
+    uiFocus.value = ''
+    nextTick(() => document.getElementById('biz-start')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }
 })
 onBeforeUnmount(() => {
   clearInterval(clock)
@@ -204,11 +209,6 @@ function onStop(type) {
 // 首页业务启动不展示「默认」；目录配置仍保留
 const HOME_BIZ_TYPES = ALL_BIZ_TYPES.filter((t) => t.id !== 'default')
 
-const HOME_TABS = [
-  { value: 'sw', label: '单一窗口' },
-  { value: 'ceb', label: '渠道入口' }
-]
-
 const homeTab = computed({
   get: () => uiTabs.value.home,
   set: (tab) => {
@@ -227,14 +227,17 @@ const homeRunningCount = computed(() => HOME_BIZ_TYPES.filter((t) => isRunning(t
 
 const bizCards = computed(() =>
   HOME_BIZ_TYPES.map((t) => {
-    // 渠道型业务（跨境电商）按「启用渠道」统计就绪数，而非 bizDirs 四目录
+    // 渠道型业务（跨境电商）按「启用渠道」统计就绪数，并显示实际启用的渠道名称
     if (t.channelBased) {
       const channels = (config.value?.cebChannels || []).filter((c) => c && c.enabled !== false)
       const ready = channels.filter(cebChannelReady).length
+      const channelNames = channels.map((c) => String(c.name || '').trim() || '未命名渠道')
       return {
         ...t,
         filled: ready,
         total: channels.length,
+        channelNames: channelNames.join('、'),
+        error: String(cebState.value.lastError || ''),
         tasks: '—',
         running: isRunning(t.id),
         miss: missingDirs(t.id)
@@ -301,15 +304,15 @@ const visibleCards = computed(() =>
       </div>
     </div>
 
-    <div class="panel shrink-0 w-full">
+    <div id="biz-start" class="panel shrink-0 w-full">
       <div class="h-10 flex items-center px-4 border-b border-slate-100">
         <span class="text-sm font-semibold">业务启动</span>
         <span class="ml-2 text-xs text-slate-400">看按钮与卡片动效即可判断启停</span>
       </div>
       <div class="px-3 pt-3 flex items-center gap-3">
-        <SegTabs v-model="homeTab" :items="HOME_TABS" />
+        <SegTabs v-model="homeTab" :items="MODULE_TABS" />
         <span v-if="homeTab === 'ceb'" class="min-w-0 truncate text-[11px] text-slate-400">
-          9610 清单 / 9710·9810 前置申报按渠道投递，渠道目录在
+          CEB 申报按渠道投递，报关单走货物申报；渠道目录在
           <button type="button" class="underline decoration-dotted text-brand-600 hover:text-brand-700" @click="openDirTab('ceb')">目录配置 · 渠道入口</button>
           维护
         </span>
@@ -333,12 +336,27 @@ const visibleCards = computed(() =>
                 <span v-if="type.subtitle !== type.title" class="text-xs text-slate-400">{{ type.subtitle }}</span>
               </div>
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                <span
+                  v-if="type.channelBased"
+                  class="inline-flex max-w-[240px] items-center rounded px-1.5 py-0.5"
+                  :class="type.channelNames ? 'bg-slate-100 text-slate-600' : 'bg-amber-50 text-amber-700'"
+                  :title="type.channelNames || '当前没有启用任何渠道'"
+                >
+                  <span class="truncate">{{ type.channelNames || '未启用渠道' }}</span>
+                </span>
                 <span :class="type.total > 0 && type.filled === type.total ? 'text-brand-600' : 'text-amber-600'">
                   {{ type.channelBased ? '渠道' : '目录' }} {{ type.filled }}/{{ type.total }}
                 </span>
                 <span v-if="!type.channelBased">并发 {{ type.tasks }}</span>
                 <span v-if="type.miss.length" class="text-amber-700 truncate max-w-[220px]" :title="type.miss.join('、')">
                   缺：{{ type.miss.join('、') }}
+                </span>
+                <span
+                  v-if="type.channelBased && type.running && type.error"
+                  class="text-rose-600 truncate max-w-[280px]"
+                  :title="type.error"
+                >
+                  接口异常：{{ type.error }}
                 </span>
               </div>
             </div>

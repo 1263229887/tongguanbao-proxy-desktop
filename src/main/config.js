@@ -6,7 +6,7 @@ import crypto from 'node:crypto'
 import { execSync } from 'node:child_process'
 import { app } from 'electron'
 import { CAN_EDIT_SERVER } from './env.js'
-import { BUSINESS_TYPES, CEB_ROUTE_IDS, emptyBizDir, emptyCebChannel } from '../shared/biz-types.js'
+import { BUSINESS_TYPES, emptyBizDir, emptyCebChannel } from '../shared/biz-types.js'
 
 // 生产包地址写死在程序里，界面不可改；测试/开发未填地址时走测试兜底。
 export const PROD_API_URL = 'https://www.astongai.com'
@@ -176,7 +176,6 @@ function normalizeCebChannels(raw) {
       ...base,
       id,
       name: str(item.name),
-      route: CEB_ROUTE_IDS.includes(item.route) ? item.route : base.route,
       dxpId: str(item.dxpId),
       sendDir: str(item.sendDir),
       receiveDir: str(item.receiveDir),

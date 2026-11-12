@@ -22,7 +22,7 @@ const statusTone = {
   ok: 'bg-emerald-500',
   warn: 'bg-amber-400',
   bad: 'bg-rose-500',
-  idle: 'bg-slate-300'
+  idle: 'bg-rose-500'
 }
 
 // 顶栏状态汇总两套引擎：任一运行即「轮询执行中」；未运行时不保留上次的报错，统一显示未启动
@@ -157,8 +157,14 @@ async function offerBizRestoreAfterUpgrade() {
     <main class="flex-1 min-w-0 flex flex-col">
       <header class="h-14 shrink-0 flex items-center gap-2 px-5 border-b border-slate-200 bg-white">
         <h1 class="text-sm font-semibold">{{ NAV.find((n) => n.key === view)?.label }}</h1>
-        <div class="ml-auto flex items-center gap-2 text-xs text-slate-500">
-          <span class="w-2 h-2 rounded-full" :class="statusTone[headerStatus.tone]" />
+        <div
+          class="ml-auto flex items-center gap-2 text-xs"
+          :class="headerStatus.tone === 'idle' ? 'text-rose-600 font-medium' : 'text-slate-500'"
+        >
+          <span
+            class="w-2 h-2 rounded-full"
+            :class="[statusTone[headerStatus.tone], headerStatus.tone === 'idle' ? 'status-dot-pulse' : '']"
+          />
           <span>{{ headerStatus.text }}</span>
         </div>
       </header>
@@ -169,3 +175,36 @@ async function offerBizRestoreAfterUpgrade() {
     </main>
   </div>
 </template>
+
+<style scoped>
+.status-dot-pulse {
+  position: relative;
+}
+
+.status-dot-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  background: rgba(244, 63, 94, 0.4);
+  animation: statusDotPulse 2.2s ease-out infinite;
+}
+
+@keyframes statusDotPulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  70%,
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-pulse::after {
+    animation: none;
+  }
+}
+</style>

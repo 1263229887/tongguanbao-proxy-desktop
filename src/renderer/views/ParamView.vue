@@ -1,15 +1,13 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { autoStart, config, logDir, meta, refreshLogs, saveConfig } from '../store.js'
+import { autoStart, config, logDir, refreshLogs, saveConfig } from '../store.js'
 
 const form = ref(null)
 const saved = ref(false)
 const uploading = ref(false)
 const uploadNote = ref(null)
-const openingDevTools = ref(false)
 
 const openLogDir = () => window.intake.openLogDir()
-const canEditServer = () => meta.value?.env !== 'prod'
 
 // 关闭「保持唤醒」属高风险操作：系统可能自动睡眠 → 断网 → 代理任务/心跳/回执全部中断，
 // 必须明确警告；用户取消则勾选状态回滚
@@ -31,15 +29,6 @@ watch(
     }
   }
 )
-
-async function openDevTools() {
-  openingDevTools.value = true
-  try {
-    await window.intake.openDevTools()
-  } finally {
-    openingDevTools.value = false
-  }
-}
 
 async function uploadNow() {
   uploading.value = true
@@ -156,11 +145,9 @@ async function submit() {
 
       <div class="flex flex-wrap items-center gap-2">
         <button class="btn-ghost" @click="openLogDir">打开日志目录</button>
-        <button v-if="canEditServer()" class="btn-ghost" :disabled="openingDevTools" @click="openDevTools">打开调试控制台</button>
       </div>
       <div class="text-xs text-slate-400 -mt-2">
-        目录：<span class="break-all">{{ logDir }}</span
-        >；调试台 Network 可查看全部请求的入参与返回，生产环境也能用 Ctrl+Shift+I 打开。
+        目录：<span class="break-all">{{ logDir }}</span>
       </div>
 
       <div class="border-t border-slate-100 pt-4 flex items-center justify-end gap-3">

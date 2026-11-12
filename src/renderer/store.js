@@ -10,6 +10,8 @@ export const PHASE_TEXT = {
 export const view = ref('home')
 // 首页与目录配置页内的模块页签：sw=单一窗口，ceb=渠道入口
 export const uiTabs = ref({ home: 'sw', dir: 'sw' })
+// 跨页跳转后需要定位的区块（如从目录配置点「去首页启动」后滚动到业务启动）
+export const uiFocus = ref('')
 export const meta = ref(null)
 export const config = ref(null)
 export const pollState = ref({
@@ -62,6 +64,12 @@ export function go(next) {
 export function goTab(next, tab) {
   uiTabs.value = { ...uiTabs.value, [next]: tab }
   view.value = next
+}
+
+export function goHomeBiz(tab) {
+  uiTabs.value = { ...uiTabs.value, home: tab }
+  uiFocus.value = 'biz'
+  view.value = 'home'
 }
 
 export function formatTime(ts) {

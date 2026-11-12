@@ -1,9 +1,10 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { config, saveConfig, uiTabs } from '../store.js'
+import { config, goHomeBiz, saveConfig, uiTabs } from '../store.js'
 import { BUSINESS_TYPES, DIR_FIELDS, countFilledDirs, emptyBizDir } from '../../shared/biz-types.js'
 import CebChannelEditor from '../components/CebChannelEditor.vue'
 import SegTabs from '../components/SegTabs.vue'
+import { MODULE_TABS } from '../module-tabs.js'
 
 const TASKS_MIN = 1
 const TASKS_MAX = 5
@@ -51,10 +52,6 @@ const openCount = computed(() => Object.values(expanded.value).filter(Boolean).l
 const bizById = Object.fromEntries(BUSINESS_TYPES.map((t) => [t.id, t]))
 
 // 页面内两个模块：单一窗口沿用原目录配置，渠道入口管理跨境电商渠道
-const DIR_TABS = [
-  { value: 'sw', label: '单一窗口' },
-  { value: 'ceb', label: '渠道入口' }
-]
 const dirTab = computed({
   get: () => uiTabs.value.dir,
   set: (tab) => {
@@ -63,6 +60,7 @@ const dirTab = computed({
 })
 const channels = computed(() => config.value?.cebChannels || [])
 const activeChannels = computed(() => channels.value.filter((c) => c && c.enabled !== false).length)
+const currentModuleRunning = computed(() => MODULE_TABS.value.find((t) => t.value === dirTab.value)?.tag?.tone === 'on')
 
 // 分组折叠条上的摘要：目录填充数与并发
 function groupSummary(type) {
@@ -261,7 +259,16 @@ const NOTICE_TONE = {
       </div>
 
       <div class="flex items-center gap-3">
-        <SegTabs v-model="dirTab" :items="DIR_TABS" />
+        <SegTabs v-model="dirTab" :items="MODULE_TABS" />
+        <button
+          v-if="!currentModuleRunning"
+          type="button"
+          class="ml-auto inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
+          @click="goHomeBiz(dirTab)"
+        >
+          去首页启动
+          <span aria-hidden="true">→</span>
+        </button>
       </div>
 
       <template v-if="dirTab === 'sw'">
@@ -368,7 +375,7 @@ const NOTICE_TONE = {
 
       <template v-else>
         <p class="px-1 text-[11px] leading-relaxed text-slate-400">
-          跨境电商进口 / 出口（9610 订单 / 运单 / 清单申报、9710·9810 订单前置申报）按渠道投递；9710·9810 报关单仍走单一窗口「货物申报」，在「单一窗口」页签维护。
+          跨境电商进口 / 出口：9610 订单 / 运单 / 清单（暂存或直报）、9710·9810 订单前置申报走本页渠道；9710·9810 报关单走「单一窗口 → 货物申报」。
         </p>
         <div class="panel p-4">
           <CebChannelEditor />

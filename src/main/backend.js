@@ -24,7 +24,7 @@ export const BIZ_CODE = {
   // 以下两个仅平台跨租户模式会出现（跨租户文档 §12）
   HEARTBEAT_TENANT_UNSET: 1050000208, // 后端未配置平台 heartbeat 归属租户
   RECEIPT_TASK_MISMATCH: 1050000209, // 回执 taskId 与 ClientSeqNo 不匹配
-  // CEB 业务校验（实例/令牌/状态冲突、未开通路由等）统一用这个码 + 具体提示
+  // CEB 业务校验（实例/令牌/状态冲突等）统一用这个码 + 具体提示
   CEB_BIZ_REJECTED: 1050004000,
   // 日志上传（《前置机日志文件上传对接文档》§4）
   LOG_CHANNEL_CLOSED: 1050000231, // 服务端未开启日志上传通道，整体拒绝

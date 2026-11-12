@@ -114,7 +114,8 @@ const NOTICE_TONE = {
   <div v-if="channels" class="flex flex-col gap-3">
     <div class="rounded-lg border border-slate-200 bg-slate-50/70 px-3.5 py-3 text-xs leading-relaxed text-slate-600">
       任务按报文中的 <strong class="font-medium text-slate-700">dxpId</strong> 匹配渠道：填写渠道 dxpId 可精确匹配，留空则作为兜底目录。
-      海关申报与前置申报由平台按任务类型自动区分，无需在渠道里选择投递路由。
+      9610 订单 / 运单 / 清单（暂存或直报）、9710·9810 订单前置申报都自动走本页渠道目录；
+      9710·9810 报关单走单一窗口「货物申报」，不在这里配置。
       发送目录（写入申报报文）与接收目录（读取回执）必填，备份 / 失败目录选填；目录须与对方传输客户端完全一致。
     </div>
 
