@@ -623,7 +623,7 @@ function extractClientSeqNo(buf) {
  * 回执处理（文档 v1.3 §7.3）：只读 InBox 文件，绝不移动/重命名/删除（§7.3.4）。
  * 以 XML 原始字节 SHA-256 为唯一标识（§7.3.5），结果按 §7.3 响应矩阵写入 SQLite 账本：
  * matched=true（duplicate 任意）→ ACKED_MATCHED；matched=false → ACKED_UNMATCHED；
- * 1050000204/205 或本地大小预检不过 → PERMANENT_REJECTED；网络/临时错误 → RETRY_PENDING 指数退避。
+ * 1050000202（任务不存在）、1050000204/205 或本地大小预检不过 → PERMANENT_REJECTED；网络/临时错误 → RETRY_PENDING 指数退避。
  *
  * 平台跨租户模式（跨租户文档 §7/§8）：上传前必须本地关联 taskId——
  * 提取 XML 内 ClientSeqNo → 查投递账本恰好命中一条 DELIVERED 轮次；
@@ -720,6 +720,15 @@ async function processInboxFile(cfg, file) {
       await upsertReceipt({ ...common, state: 'PERMANENT_REJECTED', message: res.msg })
       settled.set(file.full, { size: file.size, mtime: file.mtime })
       patch({ lastError: `回执 ${file.name} taskId 与 ClientSeqNo 不匹配，待人工核查` })
+      return
+    }
+    if (res.code === BIZ_CODE.TASK_NOT_FOUND) {
+      // 任务在后端已不存在（历史任务被清理或账本关联失效）：文档要求不重试原请求，留档告警供核查
+      const tag = platformTask ? ` taskId=${platformTask.taskId}` : ''
+      warn(`回执对应任务不存在（1050000202${tag}），记为永久拒绝，请核查本地账本与后端任务：${file.name} ${res.msg}`, 'receipt')
+      await upsertReceipt({ ...common, state: 'PERMANENT_REJECTED', message: res.msg })
+      settled.set(file.full, { size: file.size, mtime: file.mtime })
+      patch({ lastError: `回执 ${file.name} 对应任务不存在，待人工核查` })
       return
     }
     if (res.code === BIZ_CODE.BAD_KEY || res.httpStatus === 401) {
