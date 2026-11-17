@@ -548,7 +548,8 @@ function isCebMessage(buf) {
 /**
  * 处理单个回执文件：稳定后按原始字节读取 → SHA-256 查重 → 大小预检 → 带 route 上传 → 按响应矩阵入账本。
  * 不做本地 taskId 关联（CEB 回执文件名对应关系现场未确认），由后端按 XML 内容匹配；
- * matched=false 留档告警，非法/超大永久拒绝，网络/临时错误指数退避，文件始终留在接收目录。
+ * matched=false 留档告警，非法/超大/平台密钥下无法唯一匹配（1050000209）永久拒绝，
+ * 网络/临时错误指数退避，文件始终留在接收目录。
  */
 async function processCebReceipt(cfg, target, file) {
   const sha = await fileSha(file)
@@ -605,6 +606,14 @@ async function processCebReceipt(cfg, target, file) {
         message: res.msg,
         nextRetryAt: blocked ? permissionBlockedUntil.receipt : Date.now() + 2000
       })
+      return
+    }
+    if (res.code === BIZ_CODE.RECEIPT_TASK_MISMATCH) {
+      // 平台密钥下后端找不到唯一任务（避免回执记到错误租户）：重试无法收敛，留档告警待人工核查
+      warn(`CEB 回执无法唯一匹配任务（1050000209），记为永久拒绝，请核查平台任务与回执业务键：${file.name} ${res.msg}`, 'receipt')
+      await upsertCebReceipt({ ...common, state: 'PERMANENT_REJECTED', message: res.msg })
+      settled.set(file.full, { size: file.size, mtime: file.mtime })
+      patch({ lastError: `回执 ${file.name} 无法唯一匹配任务，待人工核查` })
       return
     }
     if (res.code === BIZ_CODE.RECEIPT_INVALID || res.code === BIZ_CODE.RECEIPT_TOO_LARGE || res.code === BIZ_CODE.CEB_BIZ_REJECTED) {

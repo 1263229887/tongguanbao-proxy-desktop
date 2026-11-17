@@ -2,7 +2,7 @@
 
 后端开发联调稿，更新于 2026-11-11。现场待确认项见文末。
 
-9610 三单申报生成订单 CEB303 和运单 CEB505。支付单暂时跳过。9610 清单暂存申报和直接申报均生成 CEB603，使用同一个深圳公服通道。前置机使用该租户的 `X-Agent-Key` 领取任务和上传回执。
+9610 三单申报生成订单 CEB303 和运单 CEB505。支付单暂时跳过。9610 清单暂存申报和直接申报均生成 CEB603，使用同一个深圳公服通道。CEB 前置机支持企业密钥和原 DEC 平台密钥。
 
 ## 路由与回执配置
 
@@ -37,7 +37,7 @@ yudao:
 
 前缀 `/admin-api/declaration/agent/ceb`。CEB 和 DEC 各用自己的接口路径，复用原 DEC 的公共响应、任务字段、状态上报和回执协议。客户端按接口族分别维护轮询和投递账本。
 
-使用既有 `X-Agent-Key` 企业鉴权，由现有前置机总开关控制接口访问。后端根据租户密钥确定任务和回执归属。`instanceName` 记录前置机实例，状态上报时须与领取任务的实例及令牌匹配。公共 JSON 结构为 `{code,data,msg}`，业务成功为 `code=0`。心跳继续按原协议上报。
+沿用 `X-Agent-Key` 和原前置机总开关。企业密钥只处理本租户任务。平台密钥复用现有 `declaration.agent.platform-key`（`DANA_AGENT_PLATFORM_KEY`），可领取有效业务租户的任务，响应中的 `tenantId` 为任务所属租户。平台状态上报由后端按 `taskId` 找到任务所属租户。`instanceName` 和派发令牌须与领取时匹配。公共 JSON 结构为 `{code,data,msg}`，业务成功为 `code=0`。心跳继续按原协议上报。
 
 ### 领取任务
 
@@ -117,6 +117,8 @@ yudao:
 
 从配置的接收目录按原始字节读取，等待文件稳定后上传，保留原文件。Base64 最长 4,194,304 字符。沿用原回执请求字段，CEB 额外传 `route`。仅在能可靠识别时提供 `taskId` 和 `tradeMode`，后端根据回执 XML 匹配。可选的 `receivedAt` 支持原日期时间字符串或毫秒时间戳，省略时使用服务端接收时间。
 
+平台密钥上传时，后端在有效业务租户的已派发任务中按通道、报文类型和 XML 业务键查找。传入 `taskId` 时同时核对该任务。省略 `taskId` 时，匹配到唯一任务才归入对应租户。找不到唯一任务时返回 `1050000209`，避免回执记到错误租户。
+
 回执响应保留原字段 `matched`、`taskId`、`customsStatus`、`duplicate`，新增 `receiptId`、`returnStatus`。CEB 的 `customsStatus` 为空，`returnStatus` 是 CEB 原始码，前端业务进度仍查 CEB 批次。重复上传同一租户、路由和字节哈希的回执时，返回原记录和 `duplicate=true`。已留档但未匹配时，返回 `matched=false` 和空 `taskId`。
 
 ```json
@@ -134,18 +136,26 @@ yudao:
 }
 ```
 
-- CEB304 用订单号、电商平台代码和电商企业代码匹配。
+- CEB304 优先用根节点的 `guid` 匹配原 CEB303 报文轮次，并核对订单号、电商平台代码和电商企业代码。GUID 查不到原报文时，按这三个业务字段匹配唯一任务。
 - CEB506 用运单号和物流企业代码匹配。
 - CEB604 用企业内部编号、订单号、申报企业代码、电商平台代码、电商企业代码和统计类型匹配。
 - 深圳公服的清单暂存和直报都以 `route: SZ_PUBLIC_DIRECT` 上传 CEB604。前置机能从投递账本确定对应任务时传 `taskId`，后端同时核对回执业务键。同一清单有多个候选任务且无法确定对应轮次时留档待核对。
 - 未知状态码保留原始值。回执摘要保留 returnTime、returnInfo，原始 XML 原样留档。每个任务首次已配置的业务结果用于进度展示，后续状态仍可从回执历史查看。订单回执附带的报关后续信息首批只留档。
 
+#### 9710／9810 订单状态
+
+前置机从深圳公服接收目录读取 CEB304，使用上面的 `/receipts` 原样上传。后端匹配原 CEB303 后读取 `returnStatus`。9710／9810 订单内置已核对样例 `2`（申报成功）和 `-304014`（申报失败），其他成功和失败码可沿用渠道配置。
+
+若同一目录还提供能确认入库、尚未给出申报结果的 CEB304，可在对应租户的 `SZ_PUBLIC_DIRECT` 路由项配置 `order-admission-receipt-codes`，值为已核对的入库回执码。前置机使用同一上传接口。后端从第一份匹配的入库回执接收时间起计算等待时长。配置正值 `yudao.declaration.ceb-dispatch.order-receipt-wait` 后，超时仍无可判定的最终结果时显示「入库 · 无回执」。两个配置均无默认值。晚到的最终回执仍照常上传。
+
+落盘和确认未落盘仍使用 `/tasks/{id}/status` 上报。落盘后等待回执，结果未知时先核对原任务。收到业务失败回执时，保留原回执及原因，由用户修正后发起新一轮。
+
 ### 样例核对结果
 
 | 实际样例 | returnStatus | returnInfo 摘要 | 当前处理 |
 |---|---|---|---|
-| CEB304 订单申报 | 2 | 订单新增申报成功 | 现场渠道确认后可配置为订单受理。用于 9610 比对前置判断时需核对渠道规则。 |
-| CEB304 订单旧报文 | -304014 | 订单新增申报失败，旧报文不处理 | 当前发送轮次拒绝，保留原因和原回执。 |
+| CEB304 订单申报 | 2 | 订单新增申报成功 | 9710／9810 显示申报成功。9610 仍按原渠道配置。 |
+| CEB304 订单旧报文 | -304014 | 订单新增申报失败，旧报文不处理 | 9710／9810 显示申报失败，保留原因和原回执。 |
 | CEB604 清单暂存 | 1 | 清单新增暂存成功 | 在深圳公服回执配置中加入此码后，对应 `TEMP_SAVE` 任务显示清单已暂存。 |
 
 ## 管理端接入
@@ -155,7 +165,7 @@ yudao:
 - `POST /lists/send` 接收 `{id,version,channelId,messageType,operation,requestId}`。id、version 为 9610 清单及版本，channelId 可省略以沿用现有渠道解析。三单申报传 `CEB303 + DIRECT`，一个批次同时包含 CEB303、CEB505。清单传 `CEB603 + DIRECT` 或 `CEB603 + TEMP_SAVE`。直报清单按当前清单及相同申报渠道查询对应订单和运单的受理结果。
 - `POST /orders/send` 接收现有 9710／9810 订单 XML 请求体，另传 `Idempotency-Key`。确认发送按弹窗最终值生成。本期支持新增报送。
 - `GET /batches/{id}` 查询单批次任务。 `GET /batches?source=CEB_LIST&sourceId=...` 或 `source=CROSS_BORDER_ORDER` 查询最近 20 批。
-- `POST /batches/{batchId}/tasks/{taskId}/retry` 重投确认未落盘的失败任务。
+- `POST /batches/{batchId}/tasks/{taskId}/retry` 重投确认未落盘的失败任务。9710／9810 订单草稿须与本轮一致。
 - `GET /receipts?taskId=...` 查询该任务最近 50 条回执摘要，省略 taskId 时查询待核对回执。beforeId 用于翻页。
 - 任务的传输状态有 READY、DISPATCHED、DROPPED、FAILED、DELIVERY_UNKNOWN。业务状态有 PENDING、ACCEPTED、STAGED、REJECTED。页面按两列显示，DROPPED 表示文件已落盘。状态回报晚于业务回执时保留已记录的业务结果。
 
